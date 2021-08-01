@@ -1,4 +1,4 @@
-# gool
+# gool (/ɡuːl/)
 ```
  .-.
 (o o) boo!
