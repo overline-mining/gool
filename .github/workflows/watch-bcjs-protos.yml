@@ -1,0 +1,31 @@
+name: Check for new versions of bcjs protos
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 */12 * * *"
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    if: github.repository == 'overline-mining/gool'
+
+    steps:
+      - uses: actions/checkout@v2
+      - name: Get latest bcjs protos and update src/protos golang files
+        run: |
+          sudo add-apt-repository ppa:longsleep/golang-backports
+          sudo apt-get update -y
+          sudo apt-get install -y protobuf-compiler golang-go
+          ./check_protos.sh
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }} 
+          commit-message: "Update protos to follow bcjs"
+          title: "Update protos to follow bcjs"
+          reviewers: "lgray"
+          author: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
+          branch: "bot-upgrade-protos"
+          body: |
+            Updates the the protobuf spec for overline have been found.
