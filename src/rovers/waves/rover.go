@@ -1,20 +1,20 @@
 package waves
 
 import (
-  pb "github.com/overline-mining/gool/src/protos"
+  _ "github.com/overline-mining/gool/src/protos"
 
-  "bufio"
-	"encoding/binary"
-	"io"
-	"net"
-	"strconv"
-	"strings"
-	"time"
+  _ "bufio"
+	_ "encoding/binary"
+	_ "io"
+	_ "net"
+	_ "strconv"
+	_ "strings"
+	_ "time"
 
-	"github.com/alecthomas/kong"
-	"github.com/pkg/errors"
-	"github.com/wavesplatform/gowaves/pkg/crypto"
-	"github.com/wavesplatform/gowaves/pkg/proto"
-	"go.uber.org/zap"
+	_ "github.com/alecthomas/kong"
+	_ "github.com/pkg/errors"
+	_ "github.com/wavesplatform/gowaves/pkg/crypto"
+	_ "github.com/wavesplatform/gowaves/pkg/proto"
+	_ "go.uber.org/zap"
 )
 
