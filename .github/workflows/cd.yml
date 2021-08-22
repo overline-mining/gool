@@ -25,7 +25,11 @@ jobs:
         run: echo "${{ secrets.DOCKERHUB_ACCESS_TOKEN }}" | docker login -u ${{ secrets.DOCKERHUB_ACCOUNT }} --password-stdin
       -
         name: Build and push all targets
-        run: docker buildx build --platform linux/arm64 --tag ${{ secrets.DOCKERHUB_ACCOUNT }}/gool:latest -f Dockerfile . --push
+        run: |
+          BUILD=$(git rev-parse --short HEAD)
+          VERSION=g${BUILD}
+          docker buildx build --platform linux/amd64,linux/arm64 --tag ${{ secrets.DOCKERHUB_ACCOUNT }}/gool:${VERSION} -f Dockerfile . --push
+          docker buildx build --platform linux/amd64,linux/arm64 --tag ${{ secrets.DOCKERHUB_ACCOUNT }}/gool:latest -f Dockerfile . --push
       -
         name: Display build images
         run: docker images
