@@ -1,4 +1,4 @@
-FROM golang:latest as builder
+FROM golang:bullseye as builder
 
 RUN mkdir -p /go/gool /go/gool/build /go/gool/src
 
@@ -9,7 +9,7 @@ COPY ./src /go/gool/src
 
 RUN cd gool && make
 
-FROM golang:latest
+FROM debian:bullseye-slim
 
 RUN groupadd -r gool \
      && useradd --no-log-init -r -g gool gool \
