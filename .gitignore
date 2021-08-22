@@ -18,4 +18,5 @@ vendor/
 *~
 
 # build dir
-build/
+build/_workspace
+build/bin
