@@ -1,0 +1,28 @@
+name: Deploy docker images
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+    - main
+
+jobs:
+  buildx:
+    runs-on: ubuntu-latest
+    steps:
+      -
+        name: Checkout
+        uses: actions/checkout@v2
+      -
+        name: Set up QEMU
+        uses: docker/setup-qemu-action@v1
+      -
+        name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v1
+      -
+        name: Log into registry
+        run: echo "${{ secrets.DOCKERHUB_ACCESS_TOKEN }}" | docker login -u ${{ secrets.DOCKERHUB_ACCOUNT }} --password-stdin
+      -
+        name: Build and push all targets
+        run: docker buildx build --platform linux/amd64,linux/arm/v7,linux/arm64 --tag ${{ secrets.DOCKERHUB_ACCOUNT }}/gool:latest -f Dockerfile .
