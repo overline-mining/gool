@@ -1,11 +1,11 @@
 FROM golang:latest as builder
 
-RUN mkdir gool
+RUN mkdir -p /go/gool
 
-COPY ./go.* gool/
-COPY ./Makefile gool/
-COPY ./build gool/build
-COPY ./src gool/src
+COPY ./go.* /go/gool/
+COPY ./Makefile /go/gool/
+COPY ./build /go/gool/build
+COPY ./src /go/gool/src
 
 RUN cd gool && make
 
