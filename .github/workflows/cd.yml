@@ -1,10 +1,9 @@
-name: Deploy docker images
+name: deploy docker images
 
 on:
-  workflow_dispatch:
   push:
-    branches:
-    - main
+    tags:
+    - v*.*.*
 
 jobs:
   buildx:
@@ -26,11 +25,8 @@ jobs:
       -
         name: Build and push all targets
         run: |
+          TAG=$(git describe --tags --abbrev=0)
           BUILD=$(git rev-parse --short HEAD)
-          VERSION=g${BUILD}
+          VERSION=${TAG}-g${BUILD}
           docker buildx build --platform linux/amd64,linux/arm64 --tag ${{ secrets.DOCKERHUB_ACCOUNT }}/gool:${VERSION} -f Dockerfile . --push
           docker buildx build --platform linux/amd64,linux/arm64 --tag ${{ secrets.DOCKERHUB_ACCOUNT }}/gool:latest -f Dockerfile . --push
-      -
-        name: Display build images
-        run: docker images
-

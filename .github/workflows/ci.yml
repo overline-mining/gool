@@ -1,0 +1,44 @@
+name: build and test codebase
+
+on:
+  push:
+    branches:
+    - main
+  pull_request:
+    branches:
+    - main
+  schedule:
+    - cron:  '0 0 */3 * *'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      -
+        name: Checkout
+        uses: actions/checkout@v2
+      -
+        name: Install go and test
+        run: |
+          sudo add-apt-repository ppa:longsleep/golang-backports
+          sudo apt-get update -y
+          sudo apt-get install -y golang-go
+          make
+  buildx:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      -
+        name: Checkout
+        uses: actions/checkout@v2
+      -
+        name: Set up QEMU
+        uses: docker/setup-qemu-action@v1
+      -
+        name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v1
+      -
+        name: Build all targets
+        run: |
+          docker buildx build --platform linux/amd64,linux/arm64 --tag ${{ secrets.DOCKERHUB_ACCOUNT }}/gool:pr-test -f Dockerfile .
