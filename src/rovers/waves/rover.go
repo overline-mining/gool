@@ -1,9 +1,9 @@
 package waves
 
 import (
-  _ "github.com/overline-mining/gool/src/protos"
+	_ "github.com/overline-mining/gool/src/protos"
 
-  _ "bufio"
+	_ "bufio"
 	_ "encoding/binary"
 	_ "io"
 	_ "net"
@@ -17,4 +17,3 @@ import (
 	_ "github.com/wavesplatform/gowaves/pkg/proto"
 	_ "go.uber.org/zap"
 )
-
