@@ -44,4 +44,4 @@ jobs:
       -
         name: Build all targets
         run: |
-          docker buildx build --platform {{ matrix.platform }} --tag ${{ secrets.DOCKERHUB_ACCOUNT }}/gool:pr-test -f Dockerfile .
+          docker buildx build --platform ${{ matrix.platform }} --tag ${{ secrets.DOCKERHUB_ACCOUNT }}/gool:pr-test -f Dockerfile .
