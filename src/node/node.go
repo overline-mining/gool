@@ -63,6 +63,11 @@ func (m *ConcurrentPeerMap) Get(name string) trHttp.Peer {
 	return m.PeerList[name]
 }
 
+type OverlinePeer struct {
+  Conn net.Conn
+  Height uint64
+}
+
 func main() {
 	flag.Parse()
 
@@ -195,8 +200,8 @@ func main() {
 
 	dhtServer.Announce(infoHash, 0, false)
 
-	connections := make(map[string]net.Conn)
-	dialer := net.Dialer{Timeout: time.Millisecond * 750}
+	connections := make(map[string]OverlinePeer)
+	dialer := net.Dialer{Timeout: time.Millisecond * 2000}
 	for _, peer := range allPeers.PeerList {
 
 		peerString := peer.IP.String() + fmt.Sprintf(":%d", peer.Port+1)
@@ -218,13 +223,7 @@ func main() {
 		peerid, block, err := handshake(conn, id_bytes)
 		if err == nil {
 			zap.S().Infof("Completed handshake: %v -> %v @ %v", peerString, hex.EncodeToString(peerid), block.GetHeight())
-
-			//zap.S().Info("Waiting for connection from discovery swarm...")
-			//conn2, err := discoverySwarm.Accept()
-			//checkError(err)
-			//zap.S().Infof("Got connection: %v", conn2)
-
-			connections[peerString] = conn
+			connections[peerString] = OverlinePeer{Conn: conn, Height: block.GetHeight()}
 		} else {
 			zap.S().Infof("Failed to connect to %v: %v", peerString, err)
 			conn.Close()
@@ -233,32 +232,34 @@ func main() {
 
 	zap.S().Infof("Successful handshakes with %d nodes!", len(connections))
 
-	for peer, _ := range connections {
-		zap.S().Infof("Successfully connected to %v", peer)
+
+	blockStride := uint64(10)
+	for peerAddr, peer := range connections {
+		zap.S().Infof("Successfully connected to %v", peerAddr)
+
+		iBlockRange := uint64(0)
+		for iBlockRange * blockStride < peer.Height {
+		  zap.S().Infof("beep %v %v", iBlockRange*blockStride, (iBlockRange+1)*blockStride)
+		  blocks, err := getBlockRange(peer.Conn, iBlockRange*blockStride, (iBlockRange+1)*blockStride)
+		  checkError(err)
+		  for _, b := range blocks.Blocks {
+		    if b.GetHeight() <= (iBlockRange+1)*blockStride && b.GetHeight() >= iBlockRange*blockStride {
+		      zap.S().Infof("Got Block %v: %v", b.GetHeight(), b.GetHash())
+		    }
+		  }
+		  iBlockRange += 1
+		}
 	}
 
-	//time.Sleep(time.Second * 1)
-
 	defer func() {
-		for _, conn := range connections {
-			conn.Close()
+		for _, peer := range connections {
+			peer.Conn.Close()
 		}
 	}()
 
 	for {
 		time.Sleep(time.Second * 1)
 	}
-
-	/*
-	  for true {
-	    buf := new(bytes.Buffer)
-	    dhtServer.WriteStatus(buf)
-	    buf.String()
-	    zap.S().Info(buf.String())
-	    time.Sleep(time.Second * 5)
-	    dhtServer.Announce(infoHash, 0, false)
-	  }
-	*/
 
 }
 
@@ -380,8 +381,8 @@ func handshake(conn net.Conn, id []byte) ([]byte, p2p_pb.BcBlock, error) {
 	return peerHandshake[1:], block, nil
 }
 
-func getBlockRange(conn net.Conn, low uint64, high uint64) ([]byte, error) {
-	reqstr := messages.GET_DATA + messages.SEPARATOR + fmt.Sprintf("[%d,%d]", low, high)
+func getBlockRange(conn net.Conn, low uint64, high uint64) (p2p_pb.BcBlocks, error) {
+	reqstr := messages.GET_DATA + messages.SEPARATOR + fmt.Sprintf("%d%s%d", low, messages.SEPARATOR, high)
 	reqLen := len(reqstr)
 	request := make([]byte, reqLen+4)
 	for i, ibyte := range []byte(reqstr) {
@@ -393,55 +394,50 @@ func getBlockRange(conn net.Conn, low uint64, high uint64) ([]byte, error) {
 	zap.S().Infof("Sending request: %v = %v", reqstr, request)
 
 	// write the request to the connection
-	/*
-	  _, err := conn.Write(request)
-	  if err != nil {
-	    return make([]byte, 0), err
-	  }
-	*/
+	_, err := conn.Write(request)
+	if err != nil {
+	  return p2p_pb.BcBlocks{}, err
+	}
 
 	//time.Sleep(time.Second * 1)
 
 	// receive the full message and then decode it
-	buf := make([]byte, 0x1000)
+	buf := make([]byte, 0x10000)
 	reply := make([]byte, 0)
 	n, err := conn.Read(buf)
 	if err != nil {
-		return make([]byte, 0), err
+		return p2p_pb.BcBlocks{}, err
 	}
 	zap.S().Infof("Initial read of block range: %v", n)
 	reply = append(reply, buf[:n]...)
 	nleft := int(binary.BigEndian.Uint32(reply[:4]))
 	ntot := n - 4
-	if ntot < nleft {
+	for ntot < nleft {
 		n, err = conn.Read(buf)
 		checkError(err)
 		ntot += n
 		reply = append(reply, buf[:n]...)
-		zap.S().Infof("Read additional bytes: %v %v %v", nleft, ntot, n)
+		zap.S().Debugf("Read additional bytes: %v %v %v", nleft, ntot, n)
 	}
 
-	zap.S().Infof("Expect to read %v more bytes, received %v", nleft, ntot)
-	zap.S().Infof("Reply header: %v", string(reply[4:11]))
-	zap.S().Infof("Expected lengths: ntot=%v nleft=%v", ntot, nleft)
+	zap.S().Debugf("Expect to read %v more bytes, received %v", nleft, ntot)
+	zap.S().Debugf("Reply header: %v", string(reply[4:11]))
+	zap.S().Debugf("Expected lengths: ntot=%v nleft=%v", ntot, nleft)
 
 	parts := bytes.Split(reply[4:], []byte(messages.SEPARATOR))
 
-	zap.S().Infof("parts[0] : %v", string(parts[0]))
+	zap.S().Debugf("parts[0] : %v", string(parts[0]))
+	zap.S().Debugf("Got %d blocks!", len(parts[1:]))
 
-	block := p2p_pb.BcBlock{}
-	err = proto.Unmarshal(parts[1], &block)
-	zap.S().Infof("Block has height: %v", block.GetHeight())
-	zap.S().Infof("Got a block:\n%v", block)
+  	blocks := p2p_pb.BcBlocks{}
+	err = proto.Unmarshal(parts[1], &blocks)
 	if err != nil {
-		checkError(err)
+		return blocks, err
 	}
-	zap.S().Infof("Got a block:\n%v", block)
 
-	zap.S().Infof("received reply of length %v", nleft)
-	zap.S().Infof("reply: %v", reply[:nleft])
+	zap.S().Debugf("received reply of length %v blocks", len(blocks.Blocks))
 
-	return reply[:nleft], nil
+	return blocks, nil
 }
 
 func getNtp(ctx context.Context) (types.Time, error) {
