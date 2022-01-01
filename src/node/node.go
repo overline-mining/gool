@@ -102,6 +102,13 @@ func main() {
 
 	zap.S().Info(messages.HANDSHAKE)
 
+	// database testing
+	db, err := bolt.Open("overline.boltdb", 0600, nil)
+	if err != nil {
+		zap.S().Fatal(err)
+	}
+	defer db.Close()
+
 	id_bytes := make([]byte, 32)
 	rand.Read(id_bytes)
 	id := metainfo.HashBytes(id_bytes)
@@ -234,13 +241,15 @@ func main() {
 
 	zap.S().Infof("Successful handshakes with %d nodes!", len(connections))
 
+	blockChunkSize := 1000
 	blockStride := uint64(10)
 	bcBlocks := p2p_pb.BcBlocks{}
 	for peerAddr, peer := range connections {
 		zap.S().Infof("Successfully connected to %v", peerAddr)
 
 		iBlockRange := uint64(0)
-		for iBlockRange < 100 {
+		zap.S().Info("sync request -> %v chunks", peer.Height/blockStride)
+		for iBlockRange < 350 {
 			zap.S().Infof("beep %v %v", iBlockRange*blockStride, (iBlockRange+1)*blockStride)
 			blocks, err := getBlockRange(peer.Conn, iBlockRange*blockStride, (iBlockRange+1)*blockStride)
 			checkError(err)
@@ -251,82 +260,19 @@ func main() {
 				}
 			}
 			iBlockRange += 1
+			if len(bcBlocks.Blocks) >= blockChunkSize {
+				SerializeBlocks(db, bcBlocks)
+				bcBlocks = p2p_pb.BcBlocks{}
+			}
 		}
-	}
-	blocksBytes, err := proto.Marshal(&bcBlocks)
-	c := &lz4.CompressorHC{}
-	compressionBuf := make([]byte, len(blocksBytes))
-	checkError(err)
-	zap.S().Infof("Blocklist: is %v bytes long, consisting of %v blocks", len(blocksBytes), len(bcBlocks.Blocks))
-	nCompressed, err := c.CompressBlock(blocksBytes, compressionBuf)
-	checkError(err)
-	zap.S().Infof("Blocklist: compressed to %v bytes!", nCompressed)
 
-	// database testing
-	db, err := bolt.Open("overline.boltdb", 0600, nil)
-	if err != nil {
-		zap.S().Fatal(err)
+	}
+	if len(bcBlocks.Blocks) > 0 {
+		zap.S().Info("serializer tail catch!")
+		SerializeBlocks(db, bcBlocks)
 	}
 
-	err = db.Batch(func(tx *bolt.Tx) error {
-		// block chunks keyed by the first hash in the chunk
-		chunks, err := tx.CreateBucketIfNotExists([]byte("OVERLINE-BLOCK-CHUNKS"))
-		if err != nil {
-			return err
-		}
-		// block hashes to chunks that store that block
-		block2chunk, err := tx.CreateBucketIfNotExists([]byte("OVERLINE-BLOCK-CHUNK-MAP"))
-		if err != nil {
-			return err
-		}
-		// block height to block hash
-		height2hash, err := tx.CreateBucketIfNotExists([]byte("OVERLINE-BLOCK-HEIGHT-TO-HASH"))
-		if err != nil {
-			return err
-		}
-		tx2hash, err := tx.CreateBucketIfNotExists([]byte("OVERLINE-TX-TO-BLOCK"))
-		if err != nil {
-			return err
-		}
-
-		// first store the compressed chunk of blocks
-		// everythin else is referencing information
-		chunkHash, _ := hex.DecodeString(bcBlocks.Blocks[0].GetHash())
-		err = chunks.Put(chunkHash, compressionBuf[:nCompressed])
-		if err != nil {
-			return err
-		}
-
-		for _, block := range bcBlocks.Blocks {
-			blockHash, _ := hex.DecodeString(block.GetHash())
-			blockHeight := make([]byte, 8)
-			binary.BigEndian.PutUint64(blockHeight, block.GetHeight())
-
-			err = block2chunk.Put(blockHash, chunkHash)
-			if err != nil {
-				return err
-			}
-			// eventually we'll need to figure out the winning
-			// block and only commit that!
-			err = height2hash.Put(blockHeight, blockHash)
-			if err != nil {
-				return err
-			}
-
-			for _, tx := range block.Txs {
-				txHash, _ := hex.DecodeString(tx.GetHash())
-				err = tx2hash.Put(txHash, blockHash)
-				if err != nil {
-					return err
-				}
-			}
-		}
-
-		return err
-	})
 	checkError(err)
-
-	db.Close()
 
 	defer func() {
 		for _, peer := range connections {
@@ -515,6 +461,84 @@ func getBlockRange(conn net.Conn, low uint64, high uint64) (p2p_pb.BcBlocks, err
 	zap.S().Debugf("received reply of length %v blocks", len(blocks.Blocks))
 
 	return blocks, nil
+}
+
+func SerializeBlocks(db *bolt.DB, blocks p2p_pb.BcBlocks) error {
+	c := &lz4.CompressorHC{}
+	blocksBytes, err := proto.Marshal(&blocks)
+	compressionBuf := make([]byte, len(blocksBytes))
+	checkError(err)
+	zap.S().Infof("Blocklist: is %v bytes long, consisting of %v blocks", len(blocksBytes), len(blocks.Blocks))
+	nCompressed, err := c.CompressBlock(blocksBytes, compressionBuf)
+	checkError(err)
+	zap.S().Infof("Blocklist: compressed to %v bytes!", nCompressed)
+
+	return db.Batch(func(tx *bolt.Tx) error {
+		// block chunks keyed by the first hash in the chunk
+		chunks, err := tx.CreateBucketIfNotExists([]byte("OVERLINE-BLOCK-CHUNKS"))
+		if err != nil {
+			return err
+		}
+		// block hashes to chunks that store that block
+		block2chunk, err := tx.CreateBucketIfNotExists([]byte("OVERLINE-BLOCK-CHUNK-MAP"))
+		if err != nil {
+			return err
+		}
+		// block height to block hash
+		height2hash, err := tx.CreateBucketIfNotExists([]byte("OVERLINE-BLOCK-HEIGHT-TO-HASH"))
+		if err != nil {
+			return err
+		}
+		tx2hash, err := tx.CreateBucketIfNotExists([]byte("OVERLINE-TX-TO-BLOCK"))
+		if err != nil {
+			return err
+		}
+		syncInfo, err := tx.CreateBucketIfNotExists([]byte("SYNC-INFO"))
+		if err != nil {
+			return err
+		}
+
+		// first store the compressed chunk of blocks
+		// everythin else is referencing information
+		chunkHash, _ := hex.DecodeString(blocks.Blocks[0].GetHash())
+		err = chunks.Put(chunkHash, compressionBuf[:nCompressed])
+		if err != nil {
+			return err
+		}
+
+		for _, block := range blocks.Blocks {
+			blockHash, _ := hex.DecodeString(block.GetHash())
+			blockHeight := make([]byte, 8)
+			binary.BigEndian.PutUint64(blockHeight, block.GetHeight())
+
+			// eventually we'll need to figure out the winning
+			// block and only commit that!
+			err = height2hash.Put(blockHeight, blockHash)
+			if err != nil {
+				return err
+			}
+
+			for _, tx := range block.Txs {
+				txHash, _ := hex.DecodeString(tx.GetHash())
+				err = tx2hash.Put(txHash, blockHash)
+				if err != nil {
+					return err
+				}
+			}
+
+			err = block2chunk.Put(blockHash, chunkHash)
+			if err != nil {
+				return err
+			}
+
+			err = syncInfo.Put([]byte("LastWrittenBlockHeight"), blockHeight)
+			err = syncInfo.Put([]byte("LastWrittenBlockHash"), blockHash)
+			if err != nil {
+				return err
+			}
+		}
+		return err
+	})
 }
 
 func getNtp(ctx context.Context) (types.Time, error) {
