@@ -35,6 +35,8 @@ import (
 
 	"github.com/overline-mining/gool/src/protocol/messages"
 	p2p_pb "github.com/overline-mining/gool/src/protos"
+	lz4 "github.com/pierrec/lz4/v4"
+	bolt "go.etcd.io/bbolt"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -64,8 +66,8 @@ func (m *ConcurrentPeerMap) Get(name string) trHttp.Peer {
 }
 
 type OverlinePeer struct {
-  Conn net.Conn
-  Height uint64
+	Conn   net.Conn
+	Height uint64
 }
 
 func main() {
@@ -232,24 +234,99 @@ func main() {
 
 	zap.S().Infof("Successful handshakes with %d nodes!", len(connections))
 
-
 	blockStride := uint64(10)
+	bcBlocks := p2p_pb.BcBlocks{}
 	for peerAddr, peer := range connections {
 		zap.S().Infof("Successfully connected to %v", peerAddr)
 
 		iBlockRange := uint64(0)
-		for iBlockRange * blockStride < peer.Height {
-		  zap.S().Infof("beep %v %v", iBlockRange*blockStride, (iBlockRange+1)*blockStride)
-		  blocks, err := getBlockRange(peer.Conn, iBlockRange*blockStride, (iBlockRange+1)*blockStride)
-		  checkError(err)
-		  for _, b := range blocks.Blocks {
-		    if b.GetHeight() <= (iBlockRange+1)*blockStride && b.GetHeight() >= iBlockRange*blockStride {
-		      zap.S().Infof("Got Block %v: %v", b.GetHeight(), b.GetHash())
-		    }
-		  }
-		  iBlockRange += 1
+		for iBlockRange < 100 {
+			zap.S().Infof("beep %v %v", iBlockRange*blockStride, (iBlockRange+1)*blockStride)
+			blocks, err := getBlockRange(peer.Conn, iBlockRange*blockStride, (iBlockRange+1)*blockStride)
+			checkError(err)
+			for _, b := range blocks.Blocks {
+				if b.GetHeight() < (iBlockRange+1)*blockStride && b.GetHeight() >= iBlockRange*blockStride {
+					zap.S().Infof("Got Block %v: %v", b.GetHeight(), b.GetHash())
+					bcBlocks.Blocks = append(bcBlocks.Blocks, b)
+				}
+			}
+			iBlockRange += 1
 		}
 	}
+	blocksBytes, err := proto.Marshal(&bcBlocks)
+	c := &lz4.CompressorHC{}
+	compressionBuf := make([]byte, len(blocksBytes))
+	checkError(err)
+	zap.S().Infof("Blocklist: is %v bytes long, consisting of %v blocks", len(blocksBytes), len(bcBlocks.Blocks))
+	nCompressed, err := c.CompressBlock(blocksBytes, compressionBuf)
+	checkError(err)
+	zap.S().Infof("Blocklist: compressed to %v bytes!", nCompressed)
+
+	// database testing
+	db, err := bolt.Open("overline.boltdb", 0600, nil)
+	if err != nil {
+		zap.S().Fatal(err)
+	}
+
+	err = db.Batch(func(tx *bolt.Tx) error {
+		// block chunks keyed by the first hash in the chunk
+		chunks, err := tx.CreateBucketIfNotExists([]byte("OVERLINE-BLOCK-CHUNKS"))
+		if err != nil {
+			return err
+		}
+		// block hashes to chunks that store that block
+		block2chunk, err := tx.CreateBucketIfNotExists([]byte("OVERLINE-BLOCK-CHUNK-MAP"))
+		if err != nil {
+			return err
+		}
+		// block height to block hash
+		height2hash, err := tx.CreateBucketIfNotExists([]byte("OVERLINE-BLOCK-HEIGHT-TO-HASH"))
+		if err != nil {
+			return err
+		}
+		tx2hash, err := tx.CreateBucketIfNotExists([]byte("OVERLINE-TX-TO-BLOCK"))
+		if err != nil {
+			return err
+		}
+
+		// first store the compressed chunk of blocks
+		// everythin else is referencing information
+		chunkHash, _ := hex.DecodeString(bcBlocks.Blocks[0].GetHash())
+		err = chunks.Put(chunkHash, compressionBuf[:nCompressed])
+		if err != nil {
+			return err
+		}
+
+		for _, block := range bcBlocks.Blocks {
+			blockHash, _ := hex.DecodeString(block.GetHash())
+			blockHeight := make([]byte, 8)
+			binary.BigEndian.PutUint64(blockHeight, block.GetHeight())
+
+			err = block2chunk.Put(blockHash, chunkHash)
+			if err != nil {
+				return err
+			}
+			// eventually we'll need to figure out the winning
+			// block and only commit that!
+			err = height2hash.Put(blockHeight, blockHash)
+			if err != nil {
+				return err
+			}
+
+			for _, tx := range block.Txs {
+				txHash, _ := hex.DecodeString(tx.GetHash())
+				err = tx2hash.Put(txHash, blockHash)
+				if err != nil {
+					return err
+				}
+			}
+		}
+
+		return err
+	})
+	checkError(err)
+
+	db.Close()
 
 	defer func() {
 		for _, peer := range connections {
@@ -396,7 +473,7 @@ func getBlockRange(conn net.Conn, low uint64, high uint64) (p2p_pb.BcBlocks, err
 	// write the request to the connection
 	_, err := conn.Write(request)
 	if err != nil {
-	  return p2p_pb.BcBlocks{}, err
+		return p2p_pb.BcBlocks{}, err
 	}
 
 	//time.Sleep(time.Second * 1)
@@ -429,7 +506,7 @@ func getBlockRange(conn net.Conn, low uint64, high uint64) (p2p_pb.BcBlocks, err
 	zap.S().Debugf("parts[0] : %v", string(parts[0]))
 	zap.S().Debugf("Got %d blocks!", len(parts[1:]))
 
-  	blocks := p2p_pb.BcBlocks{}
+	blocks := p2p_pb.BcBlocks{}
 	err = proto.Unmarshal(parts[1], &blocks)
 	if err != nil {
 		return blocks, err
