@@ -68,6 +68,111 @@ func (m *ConcurrentPeerMap) Get(name string) trHttp.Peer {
 type OverlinePeer struct {
 	Conn   net.Conn
 	Height uint64
+	ID     []byte
+}
+
+type OverlineMessage struct {
+	Type   string
+	PeerID []byte
+	Value  []byte
+}
+
+type OverlineMessageHandler struct {
+	Mu       sync.Mutex // mutex is for Messages, shared across threads
+	Peer     OverlinePeer
+	Messages *[]OverlineMessage
+	ID       []byte
+	buf      [0x100000]byte // 1 MB buffer for work
+	buflen   int
+}
+
+func (mh *OverlineMessageHandler) Initialize(conn net.Conn) {
+	mh.Mu.Lock()
+	defer mh.Mu.Unlock()
+
+	mh.buflen = 0
+
+	peer_id, nbuf, err := handshake_peer(conn, mh.ID, &mh.buf)
+	mh.buflen = nbuf
+	if err != nil {
+		zap.S().Infof("Failed to connect to %v: %v", hex.EncodeToString(peer_id), err)
+		conn.Close()
+		return
+	}
+	zap.S().Infof("Completed handshake: %v -> %v", hex.EncodeToString(mh.ID), hex.EncodeToString(peer_id))
+	mh.Peer = OverlinePeer{Conn: conn, ID: peer_id, Height: 0}
+}
+
+func (mh *OverlineMessageHandler) Run() {
+	for {
+		n := 0
+		cursor := 0
+		currentMessage := make([]byte, 0)
+		var err error
+		zap.S().Debugf("OverlineMessageHandler::Run START")
+		zap.S().Debugf("OverlineMessageHandler::Run -> mh.buflen is %v bytes", mh.buflen)
+		if mh.buflen == 0 {
+			n, err = mh.Peer.Conn.Read(mh.buf[0:])
+			mh.buflen = n
+			checkError(err)
+			zap.S().Debugf("OverlineMessageHandler::Run -> read %v bytes", n)
+			zap.S().Debugf("OverlineMessageHandler::Run -> cursor is %v", cursor)
+		} else {
+			n = mh.buflen
+		}
+		msgLen := int(binary.BigEndian.Uint32(mh.buf[cursor : cursor+4]))
+		zap.S().Debugf("OverlineMessageHandler::Run -> expect message of length %v", msgLen)
+		cursor += 4
+		if (n - cursor) < msgLen {
+			// get the block part out of the buffer
+			currentMessage = append(currentMessage, mh.buf[cursor:n]...)
+			ntot := n - cursor
+			cursor += n - cursor
+			// retreive the rest of the message
+			for len(currentMessage) < msgLen {
+				n, err := mh.Peer.Conn.Read(mh.buf[0:])
+				checkError(err)
+				mh.buflen = n
+				cursor = 0
+				if n+ntot < msgLen {
+					currentMessage = append(currentMessage, mh.buf[:n]...)
+					ntot += n
+					cursor = n
+				} else {
+					currentMessage = append(currentMessage, mh.buf[:(msgLen-ntot)]...)
+					cursor = msgLen - ntot
+					ntot += (msgLen - ntot)
+				}
+			}
+		} else {
+			zap.S().Debugf("OverlineMessageHandler::Run -> had the meesage locally!")
+			currentMessage = append(currentMessage, mh.buf[cursor:cursor+msgLen]...)
+			cursor += msgLen
+		}
+		// advance buffer to the start of the next message
+		copy(mh.buf[0:], mh.buf[cursor:])
+		mh.buflen = mh.buflen - cursor
+		cursor = 0
+
+		// put the message into the queue
+		parts := bytes.Split(currentMessage, []byte(messages.SEPARATOR))
+		if len(parts[0]) == 0 {
+			err := errors.New("OverlineMessageHandler::Run -> Invalid message, length of messages parts is zero!")
+			checkError(err)
+		}
+		if len(parts[0]) != 7 {
+			err := errors.New(fmt.Sprintf("OverlineMessageHandler::Run -> Invalid message, does not begin with a valid message type specifier: %v", string(parts[0])))
+			checkError(err)
+		}
+		msgType := string(parts[0])
+		zap.S().Debugf("OverlineMessageHandler::Run -> Received message of type: %v", msgType)
+
+		mh.Mu.Lock()
+		newMessage := OverlineMessage{Type: msgType, PeerID: mh.Peer.ID, Value: bytes.Join(parts[1:], []byte(messages.SEPARATOR))}
+		*mh.Messages = append(*mh.Messages, newMessage)
+		zap.S().Debugf("OverlineMessageHandler::Run -> Appended message to queue: %v %v %v", newMessage.Type, newMessage.PeerID, len(newMessage.Value))
+		mh.Mu.Unlock()
+	}
 }
 
 func main() {
@@ -209,7 +314,10 @@ func main() {
 
 	dhtServer.Announce(infoHash, 0, false)
 
+	blockChunkSize := 1000
+	blockBuffer := make(map[string]*p2p_pb.BcBlock)
 	connections := make(map[string]OverlinePeer)
+	olMessages := make([]OverlineMessage, 0)
 	dialer := net.Dialer{Timeout: time.Millisecond * 2000}
 	for _, peer := range allPeers.PeerList {
 
@@ -229,10 +337,87 @@ func main() {
 			continue
 		}
 
+		messageHandler := OverlineMessageHandler{Messages: &olMessages, ID: id_bytes}
+
+		messageHandler.Initialize(conn)
+
+		go messageHandler.Run()
+
+		go func() {
+			blockStride := 10
+			iStride := 0
+			for {
+				low, high := iStride*blockStride, (iStride+1)*blockStride
+				reqstr := messages.GET_DATA + messages.SEPARATOR + fmt.Sprintf("%d%s%d", low, messages.SEPARATOR, high)
+				reqLen := len(reqstr)
+				request := make([]byte, reqLen+4)
+
+				binary.BigEndian.PutUint32(request[0:], uint32(reqLen))
+				copy(request[4:], []byte(reqstr))
+
+				zap.S().Infof("Sending request: %v = %v", reqstr, request)
+
+				// write the request to the connection
+				_, err = conn.Write(request)
+				checkError(err)
+
+				if iStride%10 == 0 {
+					time.Sleep(time.Millisecond * 500)
+				}
+				iStride += 1
+			}
+		}()
+
+		for {
+			messageHandler.Mu.Lock()
+			if len(*messageHandler.Messages) > 0 {
+				zap.S().Infof("There are %v messages in the queue!", len(*messageHandler.Messages))
+				for len(*messageHandler.Messages) > 0 {
+					oneMessage := (*messageHandler.Messages)[0]
+					*messageHandler.Messages = (*messageHandler.Messages)[1:]
+					zap.S().Infof("Popped message of type %v from %v", oneMessage.Type, hex.EncodeToString(oneMessage.PeerID))
+					switch oneMessage.Type {
+					case messages.DATA:
+						blocks := p2p_pb.BcBlocks{}
+						err = proto.Unmarshal(oneMessage.Value, &blocks)
+						checkError(err)
+						for _, block := range blocks.Blocks {
+							blockBuffer[block.GetHash()] = block
+						}
+						blocks = p2p_pb.BcBlocks{}
+						if len(blockBuffer) >= blockChunkSize {
+							for hash, block := range blockBuffer {
+								blocks.Blocks = append(blocks.Blocks, block)
+								delete(blockBuffer, hash)
+							}
+							go SerializeBlocks(db, blocks)
+							zap.S().Infof("Received DATA: Serialized %v new blocks!", len(blocks.Blocks))
+						} else {
+							zap.S().Infof("Received DATA: Saved %v new blocks to buffer (%v)!", len(blocks.Blocks), len(blockBuffer))
+						}
+					case messages.BLOCK:
+						b := p2p_pb.BcBlock{}
+						err = proto.Unmarshal(oneMessage.Value, &b)
+						checkError(err)
+						messageHandler.Peer.Height = b.GetHeight()
+						zap.S().Infof("Received BLOCK: Set Height of %v to %v", hex.EncodeToString(oneMessage.PeerID), b.GetHeight())
+					default:
+						zap.S().Debugf("Throwing away: %v->%v", hex.EncodeToString(oneMessage.PeerID), oneMessage.Type)
+					}
+				}
+			}
+			messageHandler.Mu.Unlock()
+			time.Sleep(time.Millisecond * 50)
+		}
+
+		time.Sleep(time.Second * 600)
+
+		os.Exit(1)
+
 		peerid, block, err := handshake(conn, id_bytes)
 		if err == nil {
 			zap.S().Infof("Completed handshake: %v -> %v @ %v", peerString, hex.EncodeToString(peerid), block.GetHeight())
-			connections[peerString] = OverlinePeer{Conn: conn, Height: block.GetHeight()}
+			connections[peerString] = OverlinePeer{Conn: conn, ID: peerid, Height: block.GetHeight()}
 		} else {
 			zap.S().Infof("Failed to connect to %v: %v", peerString, err)
 			conn.Close()
@@ -241,7 +426,6 @@ func main() {
 
 	zap.S().Infof("Successful handshakes with %d nodes!", len(connections))
 
-	blockChunkSize := 1000
 	blockStride := uint64(10)
 	bcBlocks := p2p_pb.BcBlocks{}
 	for peerAddr, peer := range connections {
@@ -284,6 +468,66 @@ func main() {
 		time.Sleep(time.Second * 1)
 	}
 
+}
+
+func handshake_peer(conn net.Conn, id []byte, buf *[0x100000]byte) ([]byte, int, error) {
+	peerHandshake := make([]byte, 0)
+
+	lenSize := binary.PutUvarint(buf[0:], uint64(len(id)))
+
+	copy(buf[lenSize:], id)
+
+	zap.S().Debugf("handshake -> sending lenSize: %v id: %v", lenSize, hex.EncodeToString(buf[lenSize:len(id)]))
+
+	_, err := conn.Write(buf[:lenSize+len(id)])
+	if err != nil {
+		return make([]byte, 0), -1, err
+	}
+
+	// receive the full message and then decode it
+	n, err := conn.Read(buf[0:])
+	if err != nil {
+		return make([]byte, 0), -1, err
+	}
+	ntot := n
+	// there are four possibilities for handshake replies:
+	// 1 - the first read is the length of handshake (then we need to read more)
+	// 2 - the first read is the length-encoded full handshake reply
+	// 3 - the first read is the L-E full handshake reply and the handshake block
+	// 4 - the first read   is the L-E full handshake reply and part of the handshake block
+	zap.S().Debugf("peer handshake -> received buffer of length %d", ntot)
+
+	// all cases deal with length of peer handshake (always one byte for sane peers)
+	cursor := uint64(1)
+	lenPeer, _ := binary.Uvarint(buf[:cursor])
+	peerHandshake = append(peerHandshake, buf[:cursor]...)
+
+	if lenPeer != 32 && lenPeer != 20 {
+		return make([]byte, 0), -1, errors.New(fmt.Sprintf("Invalid peer handshake length: %v", lenPeer))
+	}
+
+	// if we only received the first few bytes of the peer handshake
+	// ask for more
+	nPeerRemain := uint64(0)
+	if uint64(ntot) < lenPeer+1 {
+		zap.S().Debugf("peer handshake -> received partial peer handshake, requesting more data")
+		nPeerRemain = lenPeer + 1 - uint64(n)
+		n, err = conn.Read(buf[n:])
+		if err != nil {
+			return make([]byte, 0), -1, err
+		}
+		ntot += n
+		zap.S().Debugf("peer handshake -> received buffer of length %d, expecting %v", n, nPeerRemain)
+		peerHandshake = append(peerHandshake, buf[cursor:cursor+lenPeer]...)
+	} else { // process the rest of buf
+		peerHandshake = append(peerHandshake, buf[cursor:cursor+lenPeer]...)
+	}
+	zap.S().Debugf("peer handshake -> full handshake: (%v) %v", lenPeer, hex.EncodeToString(peerHandshake[cursor:cursor+lenPeer]))
+	cursor += lenPeer
+
+	copy(buf[0:], buf[cursor:ntot])
+
+	return peerHandshake[1:lenPeer], int(ntot - int(cursor)), nil
 }
 
 func handshake(conn net.Conn, id []byte) ([]byte, p2p_pb.BcBlock, error) {
