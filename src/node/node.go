@@ -46,6 +46,7 @@ var (
 	limitAllConnections = flag.Uint("limit-connections", 60, "Total limit of network connections, both inbound and outbound. Divided in half to limit each direction. Default value is 60.")
 	dbFileDescriptors   = flag.Int("db-file-descriptors", 500, "Maximum allowed file descriptors count that will be used by state database. Default value is 500.")
 	olTestPeer          = flag.String("test-peer", "", "Specify an exact peer (ip:port) to connect to instead of using tracker")
+	dbFilePath          = flag.String("db-file-path", "overline.boltdb", "The file we're going to write the blockchain to")
 )
 
 type ConcurrentPeerMap struct {
@@ -111,10 +112,10 @@ func (mh *OverlineMessageHandler) Run() {
 		var err error
 		zap.S().Debugf("OverlineMessageHandler::Run START")
 		zap.S().Debugf("OverlineMessageHandler::Run -> mh.buflen is %v bytes", mh.buflen)
-		if mh.buflen == 0 {
-			n, err = mh.Peer.Conn.Read(mh.buf[0:])
-			mh.buflen = n
+		if mh.buflen < 4 {
+			n, err = mh.Peer.Conn.Read(mh.buf[mh.buflen:])
 			checkError(err)
+			mh.buflen += n
 			zap.S().Debugf("OverlineMessageHandler::Run -> read %v bytes", n)
 			zap.S().Debugf("OverlineMessageHandler::Run -> cursor is %v", cursor)
 		} else {
@@ -194,25 +195,36 @@ func main() {
 
 	common.SetupLogger(*logLevel)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	//ctx, cancel := context.WithCancel(context.Background())
 
-	ntpTime, err := getNtp(ctx)
-	if err != nil {
-		zap.S().Error(err)
-		cancel()
-		return
-	}
+	/*
+		ntpTime, err := getNtp(ctx)
+		if err != nil {
+			zap.S().Error(err)
+			cancel()
+			return
+		}
 
-	zap.S().Info(ntpTime)
-
+		zap.S().Info(ntpTime)
+	*/
 	zap.S().Info(messages.HANDSHAKE)
 
 	// database testing
-	db, err := bolt.Open("overline.boltdb", 0600, nil)
-	if err != nil {
-		zap.S().Fatal(err)
-	}
+	db, err := bolt.Open(*dbFilePath, 0600, nil)
+	checkError(err)
 	defer db.Close()
+
+	startingHeight := uint64(0)
+	err = db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte("SYNC-INFO"))
+		heightBytes := b.Get([]byte("LastWrittenBlockHeight"))
+		startingHeight = binary.BigEndian.Uint64(heightBytes)
+		zap.S().Infof("The LastWrittenBlockHeight is: %d\n", startingHeight)
+		return nil
+	})
+	if err != nil {
+		startingHeight = 0
+	}
 
 	id_bytes := make([]byte, 32)
 	rand.Read(id_bytes)
@@ -344,10 +356,16 @@ func main() {
 		go messageHandler.Run()
 
 		go func() {
-			blockStride := 10
-			iStride := 0
-			for {
-				low, high := iStride*blockStride, (iStride+1)*blockStride
+			blockStride := uint64(10)
+			iStride := uint64(0)
+			topRange := uint64(startingHeight + (iStride+1)*blockStride + 1)
+			for messageHandler.Peer.Height == 0 || topRange < messageHandler.Peer.Height {
+				low, high := uint64(iStride*blockStride), uint64((iStride+1)*blockStride)
+				low += startingHeight + 1
+				high += startingHeight + 1
+				if high > topRange {
+					high = topRange
+				}
 				reqstr := messages.GET_DATA + messages.SEPARATOR + fmt.Sprintf("%d%s%d", low, messages.SEPARATOR, high)
 				reqLen := len(reqstr)
 				request := make([]byte, reqLen+4)
@@ -355,7 +373,7 @@ func main() {
 				binary.BigEndian.PutUint32(request[0:], uint32(reqLen))
 				copy(request[4:], []byte(reqstr))
 
-				zap.S().Infof("Sending request: %v = %v", reqstr, request)
+				zap.S().Infof("Sending request: %v (topRange=%v, Peer Height=%v)", reqstr, topRange, messageHandler.Peer.Height)
 
 				// write the request to the connection
 				_, err = conn.Write(request)
@@ -365,6 +383,7 @@ func main() {
 					time.Sleep(time.Millisecond * 500)
 				}
 				iStride += 1
+				topRange = uint64(startingHeight + (iStride+1)*blockStride + 1)
 			}
 		}()
 
