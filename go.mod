@@ -14,6 +14,7 @@ require (
 	github.com/wavesplatform/gowaves v0.9.1-0.20211230075234-4aa7eeb54039
 	go.etcd.io/bbolt v1.3.6 // indirect
 	go.uber.org/zap v1.19.1
+	golang.org/x/crypto v0.0.0-20211215153901-e495a2d5b3d3 // indirect
 	google.golang.org/grpc v1.43.0
 	google.golang.org/protobuf v1.27.1
 )

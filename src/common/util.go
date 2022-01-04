@@ -1,16 +1,16 @@
 package common
 
 import (
+	"fmt"
 	"os"
 	"strings"
-	"fmt"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
 
 func BriefHash(hash string) string {
-  return fmt.Sprintf("[%s...%s]",hash[:8], hash[len(hash) - 8:])
+	return fmt.Sprintf("[%s...%s]", hash[:8], hash[len(hash)-8:])
 }
 
 func SetupLogger(level string) (*zap.Logger, *zap.SugaredLogger) {

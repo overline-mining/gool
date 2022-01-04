@@ -35,6 +35,7 @@ import (
 
 	"github.com/overline-mining/gool/src/protocol/messages"
 	p2p_pb "github.com/overline-mining/gool/src/protos"
+	"github.com/overline-mining/gool/src/validation"
 	lz4 "github.com/pierrec/lz4/v4"
 	bolt "go.etcd.io/bbolt"
 	"google.golang.org/protobuf/proto"
@@ -219,7 +220,7 @@ func main() {
 	err = db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte("SYNC-INFO"))
 		if b == nil {
-		  return errors.New("Unitialized blockchain file!")
+			return errors.New("Unitialized blockchain file!")
 		}
 		heightBytes := b.Get([]byte("LastWrittenBlockHeight"))
 		startingHeight = binary.BigEndian.Uint64(heightBytes)
@@ -227,69 +228,63 @@ func main() {
 		return nil
 	})
 	if err != nil {
-	        zap.S().Warn("Blockchain file was uninitialized - will sync from genesis")
+		zap.S().Warn("Blockchain file was uninitialized - will sync from genesis")
 		startingHeight = 0
 	} else {
-	        decompressionBuf := make([]byte, 0x3000000) // 50MB should be enough to cover
-	        if *validateFullChain {
-		        err = db.View(func(tx *bolt.Tx) error {
-	                  zap.S().Debug("Performing complete validation of chain before connecting.")
-			  heights := tx.Bucket([]byte("OVERLINE-BLOCK-HEIGHT-TO-HASH"))
-			  chunks := tx.Bucket([]byte("OVERLINE-BLOCK-CHUNKS"))
-                	  block2chunk := tx.Bucket([]byte("OVERLINE-BLOCK-CHUNK-MAP"))
+		decompressionBuf := make([]byte, 0x3000000) // 50MB should be enough to cover
+		if *validateFullChain {
+			err = db.View(func(tx *bolt.Tx) error {
+				zap.S().Debug("Performing complete validation of chain before connecting.")
+				heights := tx.Bucket([]byte("OVERLINE-BLOCK-HEIGHT-TO-HASH"))
+				chunks := tx.Bucket([]byte("OVERLINE-BLOCK-CHUNKS"))
+				block2chunk := tx.Bucket([]byte("OVERLINE-BLOCK-CHUNK-MAP"))
 
-			  c := heights.Cursor()
+				c := heights.Cursor()
 
-			  currentChunk := make([]byte, 32)
-			  blockMap := make(map[string]*p2p_pb.BcBlock)
-			  for k, v := c.First(); k != nil; k, v = c.Next() {
-			    height := binary.BigEndian.Uint64(k)
-			    hash := hex.EncodeToString(v)
-			    chunkHash := block2chunk.Get(v)
-			    chunk := chunks.Get(chunkHash)
-			    
-			    zap.S().Debugf("key=%v, value=%v chunkHash=%v len(chunk)=%v", height, common.BriefHash(hash), common.BriefHash(hex.EncodeToString(chunkHash)), len(chunk))
-			    if bytes.Compare(currentChunk, chunkHash) != 0 {
-			      nDecompressed, err := lz4.UncompressBlock(chunk, decompressionBuf[0:])
-			      if err != nil {
-			        return err
-			      }
-			      blockList := p2p_pb.BcBlocks{}
-			      err = proto.Unmarshal(decompressionBuf[:nDecompressed], &blockList)
-			      if err != nil {
-			        return err
-			      }
-			      for _, block := range blockList.Blocks {
-			        blockMap[block.GetHash()] = block
-			      }
-			      strCurrentChunk := hex.EncodeToString(currentChunk)
-			      strChunkHash := hex.EncodeToString(chunkHash)
-			      zap.S().Debugf("Updating chunk hash from %s to %s", common.BriefHash(strCurrentChunk), common.BriefHash(strChunkHash))
-			      copy(currentChunk, chunkHash)
-			    }
-			    block := blockMap[hash]
-			    zap.S().Debugf("%v: Block with hash %s has height %v, expecting %v", common.BriefHash(hash), common.BriefHash(block.GetHash()), block.GetHeight(), height)
-			    if len(block.GetBlockchainHeaders().GetEth()) > 0 {
-			    if len(block.GetBlockchainHeaders().GetEth()[0].GetMarkedTxs()) > 0 {
-			      for _, mtx := range block.GetBlockchainHeaders().GetEth()[0].GetMarkedTxs() {
-			        asJSString := []string{}
-				for _, byte := range mtx.GetValue() {
-				  asJSString = append(asJSString, fmt.Sprintf("%d", byte))
+				currentChunk := make([]byte, 32)
+				blockMap := make(map[string]*p2p_pb.BcBlock)
+				for k, v := c.First(); k != nil; k, v = c.Next() {
+					height := binary.BigEndian.Uint64(k)
+					hash := hex.EncodeToString(v)
+					chunkHash := block2chunk.Get(v)
+					chunk := chunks.Get(chunkHash)
+
+					if bytes.Compare(currentChunk, chunkHash) != 0 {
+						nDecompressed, err := lz4.UncompressBlock(chunk, decompressionBuf[0:])
+						if err != nil {
+							return err
+						}
+						blockList := p2p_pb.BcBlocks{}
+						err = proto.Unmarshal(decompressionBuf[:nDecompressed], &blockList)
+						if err != nil {
+							return err
+						}
+						for _, block := range blockList.Blocks {
+							blockMap[block.GetHash()] = block
+						}
+						strCurrentChunk := hex.EncodeToString(currentChunk)
+						strChunkHash := hex.EncodeToString(chunkHash)
+						zap.S().Debugf("Updating chunk hash from %s to %s", common.BriefHash(strCurrentChunk), common.BriefHash(strChunkHash))
+						copy(currentChunk, chunkHash)
+					}
+					block := blockMap[hash]
+					isValid, err := validation.IsValidBlock(block)
+					if err != nil {
+						zap.S().Errorf("%v: %v", common.BriefHash(hash), err)
+					}
+					if isValid {
+						zap.S().Debugf("Valid block %v has height %v, expecting %v", common.BriefHash(block.GetHash()), block.GetHeight(), height)
+					} else {
+						zap.S().Debugf("Invalid block %v has height %v, expecting %v", common.BriefHash(block.GetHash()), block.GetHeight(), height)
+					}
 				}
-			        zap.S().Debugf("%v: %v", common.BriefHash(block.GetHash()), strings.Join(asJSString,","))
-			      }
-			      return errors.New("BEEP!")
-			    }
-			    }
-			  }
-			  return nil
+				return nil
 			})
 			checkError(err)
 		} else {
-		  zap.S().Debug("Will perform light validation of chain once connected.")
+			zap.S().Debug("Will perform light validation of chain once connected.")
 		}
 	}
-	
 
 	id_bytes := make([]byte, 32)
 	rand.Read(id_bytes)
