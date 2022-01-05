@@ -2,10 +2,13 @@ package validation
 
 import (
 	"encoding/hex"
+	//"encoding/base64"
 	"errors"
 	"fmt"
 	"math/big"
 	"os"
+	//"sort"
+	"strings"
 
 	"github.com/overline-mining/gool/src/common"
 	"github.com/overline-mining/gool/src/genesis"
@@ -137,13 +140,15 @@ func IsChainRootCorrectlyCalculated(block *p2p_pb.BcBlock) bool {
 	)
 
 	if block.GetHash() == defaultHash1 || block.GetHash() == defaultHash2 {
+		zap.S().Debugf("Skipping validation \"IsChainRootCorrectlyCalculated\" for hash %v", block.GetHash())
 		return true
 	}
 
 	receivedChainRoot := block.GetChainRoot()
-
-	expectedBlockHashes := getChildrenBlocksHashes(block.GetBlockchainHeaders())
+	//zap.S().Debugf("Expected chain root -> %v", receivedChainRoot)
+	expectedBlockHashes := getChildrenBlocksHashes(block.GetBlockchainHeaders(), block.GetHeight())
 	expectedChainRoot := olhash.Blake2bl(getChildrenRootHash(expectedBlockHashes).String())
+	//zap.S().Debugf("Recalculated chain root -> %v", expectedChainRoot)
 	return receivedChainRoot == expectedChainRoot
 }
 
@@ -155,7 +160,7 @@ func IsMerkleRootCorrectlyCalculated(block *p2p_pb.BcBlock) bool {
 	expectedMerkle := block.GetMerkleRoot()
 
 	toHash := []string{}
-	toHash = append(toHash, getChildrenBlocksHashes(block.GetBlockchainHeaders())...)
+	toHash = append(toHash, getChildrenBlocksHashes(block.GetBlockchainHeaders(), block.GetHeight())...)
 
 	for _, tx := range block.GetTxs() {
 		toHash = append(toHash, tx.GetHash())
@@ -173,6 +178,8 @@ func IsMerkleRootCorrectlyCalculated(block *p2p_pb.BcBlock) bool {
 	for _, h := range toHash[1:] {
 		merkleRoot = olhash.Blake2bl(merkleRoot + h)
 	}
+
+	zap.S().Debugf("Calculated MerkleRoot %v == %v (expected)", merkleRoot, expectedMerkle)
 
 	return expectedMerkle == merkleRoot
 }
@@ -198,35 +205,60 @@ func markedTxHash(mtx *p2p_pb.MarkedTransaction) string {
 		mtx.GetToken(),
 		mtx.GetAddrFrom(),
 		mtx.GetAddrTo(),
-		asJSString,
+		strings.Join(asJSString, ","),
 	)
+	//zap.S().Debugf("markedTxHash -> toHash %s", toHash)
 	return olhash.Blake2bl(toHash)
 }
 
-func blockHeaderHash(header *p2p_pb.BlockchainHeader) string {
+func blockHeaderHash(header *p2p_pb.BlockchainHeader, height uint64) string {
+	const (
+		jsHash1                 = "4e0e3c1e3a5fcb4096a53cc0672475740ab4eedb9adb974b84be4c7e9d95dee9"
+		nonDeterministicHash1   = "48e97a284e4588e4d08e7a6bfa3c0e311aa929af4b52c533b3ef3eeae2944f57"
+		nonDeterministicHeight1 = uint64(1074552)
+		jsHash2                 = "83644a084e313a5464cf03f08d4890e723cf2a433aa3b9562c180760b5f6e5ee"
+		nonDeterministicHash2   = "ace091c229a84f2db8c62cf1f3920bc3338161143708176d329da5bbe7fcf31d"
+		nonDeterministicHeight2 = uint64(2171001)
+	)
 	toHash := header.GetHash() + header.GetMerkleRoot()
 	for _, mtx := range header.GetMarkedTxs() {
-		toHash = toHash + markedTxHash(mtx)
+		mtxHash := markedTxHash(mtx)
+		zap.S().Debugf("hashedMtx -> %v", mtxHash)
+		toHash += mtxHash
 	}
-	return olhash.Blake2bl(toHash)
+	//zap.S().Debugf("blockHeaders -> toHash %s", toHash)
+
+	outHash := olhash.Blake2bl(toHash)
+	// these serialization differences seem to be non-deterministic in behavior
+	// across languages, this will be in different orders for js and golang
+	//zap.S().Debugf("blockHeaders -> hashed start %s", outHash)
+	if height == nonDeterministicHeight1 && outHash == nonDeterministicHash1 {
+		outHash = jsHash1
+	}
+	if height == nonDeterministicHeight2 && outHash == nonDeterministicHash2 {
+		outHash = jsHash2
+	}
+	//zap.S().Debugf("blockHeaders -> hashed final %s", outHash)
+
+	return outHash
 }
 
-func getChildrenBlocksHashes(headers *p2p_pb.BlockchainHeaders) []string {
+func getChildrenBlocksHashes(headers *p2p_pb.BlockchainHeaders, height uint64) []string {
 	out := []string{}
 	for _, header := range headers.GetBtc() {
-		out = append(out, blockHeaderHash(header))
+		out = append(out, blockHeaderHash(header, height))
 	}
 	for _, header := range headers.GetEth() {
-		out = append(out, blockHeaderHash(header))
+		out = append(out, blockHeaderHash(header, height))
 	}
 	for _, header := range headers.GetLsk() {
-		out = append(out, blockHeaderHash(header))
+		out = append(out, blockHeaderHash(header, height))
 	}
 	for _, header := range headers.GetNeo() {
-		out = append(out, blockHeaderHash(header))
+		out = append(out, blockHeaderHash(header, height))
 	}
 	for _, header := range headers.GetWav() {
-		out = append(out, blockHeaderHash(header))
+		out = append(out, blockHeaderHash(header, height))
 	}
 	return out
 }
@@ -254,28 +286,34 @@ func isSkippableBlock(block *p2p_pb.BcBlock) bool {
 
 	// block soft opening limit
 	if height < 151000 {
+		zap.S().Debugf("Block validation skipping block %v < 151000", height)
 		return true
 	}
 
 	// gpu mining
 	if height == 303401 || height == 641452 {
+		zap.S().Debugf("Block validation skipping block %v == 303401, 641452", height)
 		return true
 	}
 
 	if height <= 1074546 && height >= 1074499 {
+		zap.S().Debugf("Block validation skipping block 1074499 < %v <= 1074546", height)
 		return true
 	}
 
 	if height <= 2171032 && height >= 2171009 {
+		zap.S().Debugf("Block validation skipping block 2171009 < %v <= 2171032", height)
 		return true
 	}
 
 	if height == 4207048 {
+		zap.S().Debugf("Block validation skipping block %v == 4207048", height)
 		return true
 	}
 
 	// overline weighted txs
 	if height == 1771221 && prevHash == specialPrevHash {
+		zap.S().Debugf("Block validation skipping block %v == 1771221, %v == %v", height, prevHash, specialPrevHash)
 		return true
 	}
 	return false

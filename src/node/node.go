@@ -240,16 +240,24 @@ func main() {
 				block2chunk := tx.Bucket([]byte("OVERLINE-BLOCK-CHUNK-MAP"))
 
 				c := heights.Cursor()
+				seek := uint64(1) //uint64(2171001) //uint64(1074498) //uint64(1074552) //uint64(202669)
+				seekBytes := make([]byte, 8)
+				binary.BigEndian.PutUint64(seekBytes, seek)
 
 				currentChunk := make([]byte, 32)
 				blockMap := make(map[string]*p2p_pb.BcBlock)
-				for k, v := c.First(); k != nil; k, v = c.Next() {
+				for k, v := c.Seek(seekBytes); k != nil; k, v = c.Next() {
 					height := binary.BigEndian.Uint64(k)
 					hash := hex.EncodeToString(v)
 					chunkHash := block2chunk.Get(v)
 					chunk := chunks.Get(chunkHash)
 
+					//if height == uint64(2171003) {
+					//  return errors.New("break!")
+					//}
+
 					if bytes.Compare(currentChunk, chunkHash) != 0 {
+						blockMap = make(map[string]*p2p_pb.BcBlock) // reset the blockmap
 						nDecompressed, err := lz4.UncompressBlock(chunk, decompressionBuf[0:])
 						if err != nil {
 							return err
@@ -276,6 +284,9 @@ func main() {
 						zap.S().Debugf("Valid block %v has height %v, expecting %v", common.BriefHash(block.GetHash()), block.GetHeight(), height)
 					} else {
 						zap.S().Debugf("Invalid block %v has height %v, expecting %v", common.BriefHash(block.GetHash()), block.GetHeight(), height)
+					}
+					if !isValid {
+						return err
 					}
 				}
 				return nil
