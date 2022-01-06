@@ -28,6 +28,7 @@ import (
 	trHttp "github.com/anacrolix/torrent/tracker/http"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -47,7 +48,8 @@ var (
 	limitAllConnections = flag.Uint("limit-connections", 60, "Total limit of network connections, both inbound and outbound. Divided in half to limit each direction. Default value is 60.")
 	dbFileDescriptors   = flag.Int("db-file-descriptors", 500, "Maximum allowed file descriptors count that will be used by state database. Default value is 500.")
 	olTestPeer          = flag.String("test-peer", "", "Specify an exact peer (ip:port) to connect to instead of using tracker")
-	dbFilePath          = flag.String("db-file-path", "overline.boltdb", "The file we're going to write the blockchain to")
+	olWorkDir           = flag.String("ol-workdir", ".overline", "Specify the working directory for the node")
+	dbFileName          = flag.String("db-file-name", "overline.boltdb", "The file we're going to write the blockchain to within olWorkDir")
 	validateFullChain   = flag.Bool("full-validation", false, "Run a slow but complete validation of your local blockchain DB")
 )
 
@@ -221,8 +223,13 @@ func main() {
 		zap.S().Info(ntpTime)
 	*/
 
+	// make the workdir if it does not exist
+	err = os.MkdirAll(*olWorkDir, 0755)
+	checkError(err)
+
 	// database testing
-	db, err := bolt.Open(*dbFilePath, 0600, nil)
+	dbFilePath := filepath.Join(*olWorkDir, *dbFileName)
+	db, err := bolt.Open(dbFilePath, 0600, nil)
 	checkError(err)
 	defer db.Close()
 

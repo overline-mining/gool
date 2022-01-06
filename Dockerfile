@@ -25,4 +25,6 @@ RUN mkdir -p /opt/gool/bin
 COPY LICENSE ./
 COPY --from=builder --chown=gool:gool /go/gool/build/bin /opt/gool/bin
 
-CMD /opt/gool/bin/node
+ENTRYPOINT ["/opt/gool/bin/node", "-ol-workdir=/opt/gool/.overline"]
+
+CMD ["-help"]
