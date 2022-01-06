@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	dht "github.com/anacrolix/dht/v2"
 	"github.com/anacrolix/dht/v2/krpc"
@@ -26,8 +27,6 @@ import (
 	"github.com/anacrolix/torrent/tracker"
 	trHttp "github.com/anacrolix/torrent/tracker/http"
 	"net"
-	//"io/ioutil"
-	"errors"
 	"os"
 	"strconv"
 	"strings"
@@ -252,10 +251,6 @@ func main() {
 					chunkHash := block2chunk.Get(v)
 					chunk := chunks.Get(chunkHash)
 
-					//if height == uint64(2171003) {
-					//  return errors.New("break!")
-					//}
-
 					if bytes.Compare(currentChunk, chunkHash) != 0 {
 						blockMap = make(map[string]*p2p_pb.BcBlock) // reset the blockmap
 						nDecompressed, err := lz4.UncompressBlock(chunk, decompressionBuf[0:])
@@ -472,25 +467,35 @@ func main() {
 						err = proto.Unmarshal(oneMessage.Value, &blocks)
 						checkError(err)
 						for _, block := range blocks.Blocks {
-							blockBuffer[block.GetHash()] = block
+							isValid, err := validation.IsValidBlock(block)
+							if isValid {
+								blockBuffer[block.GetHash()] = block
+							} else {
+								zap.S().Warnf("Not serializing invalid block %v: %v", common.BriefHash(block.GetHash()), err)
+							}
 						}
-						blocks = p2p_pb.BcBlocks{}
-						if len(blockBuffer) >= blockChunkSize {
+						if len(blockBuffer) < blockChunkSize {
+							zap.S().Infof("Received DATA: Saved %v new blocks to buffer (%v)!", len(blocks.Blocks), len(blockBuffer))
+						} else {
+							blocks = p2p_pb.BcBlocks{}
 							for hash, block := range blockBuffer {
 								blocks.Blocks = append(blocks.Blocks, block)
 								delete(blockBuffer, hash)
 							}
 							go SerializeBlocks(db, blocks)
 							zap.S().Infof("Received DATA: Serialized %v new blocks!", len(blocks.Blocks))
-						} else {
-							zap.S().Infof("Received DATA: Saved %v new blocks to buffer (%v)!", len(blocks.Blocks), len(blockBuffer))
 						}
 					case messages.BLOCK:
 						b := p2p_pb.BcBlock{}
 						err = proto.Unmarshal(oneMessage.Value, &b)
 						checkError(err)
-						messageHandler.Peer.Height = b.GetHeight()
-						zap.S().Infof("Received BLOCK: Set Height of %v to %v", hex.EncodeToString(oneMessage.PeerID), b.GetHeight())
+						isValid, err := validation.IsValidBlock(&b)
+						if isValid {
+							messageHandler.Peer.Height = b.GetHeight()
+							zap.S().Infof("Received Valid BLOCK: Set Height of %v to %v", hex.EncodeToString(oneMessage.PeerID), b.GetHeight())
+						} else {
+							zap.S().Infof("Received Invalid BLOCK: %v -> %v", b.GetHeight(), err)
+						}
 					default:
 						zap.S().Debugf("Throwing away: %v->%v", hex.EncodeToString(oneMessage.PeerID), oneMessage.Type)
 					}
