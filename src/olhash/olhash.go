@@ -43,13 +43,10 @@ func CalcDistance(work []byte, soln []byte) uint64 {
 	return uint64(acc * float64(uint64(1000000000000000)))
 }
 
-func eval(work []byte, miner_key []byte, merkle_root []byte,
-	nonce uint64, timestamp int64) uint64 {
-	nonce_bytes := []byte(strconv.FormatUint(nonce, 10))
-	timestamp_bytes := []byte(strconv.FormatInt(timestamp, 10))
+func Eval(work, miner_key, merkle_root, nonce []byte, timestamp uint64) uint64 {
+	timestamp_bytes := []byte(strconv.FormatUint(timestamp, 10))
 
-	nonce_hash_str := hex.EncodeToString(Blake2blFromBytes(nonce_bytes))
-	nonce_hash := []byte(nonce_hash_str)
+	nonce_hash := []byte(hex.EncodeToString(Blake2blFromBytes(nonce)))
 
 	tohash := append(miner_key, merkle_root...)
 	tohash = append(tohash, nonce_hash...)
@@ -60,14 +57,19 @@ func eval(work []byte, miner_key []byte, merkle_root []byte,
 	return CalcDistance(work, guess)
 }
 
-func Verify(Difficulty *big.Int, Work string, MinerKey string, MerkleRoot string, Nonce uint64, Timestamp int64) bool {
+func EvalString(work, miner_key, merkle_root, nonce string, timestamp uint64) uint64 {
+
+	return Eval([]byte(work), []byte(miner_key), []byte(merkle_root), []byte(nonce), timestamp)
+}
+
+func Verify(Difficulty *big.Int, Work, MinerKey, MerkleRoot, Nonce string, Timestamp uint64) bool {
 	work := []byte(Work)
 	miner_key := []byte(MinerKey)
 	merkle_root := []byte(MerkleRoot)
-	nonce := Nonce
+	nonce := []byte(Nonce)
 	ts := Timestamp
 
-	calc_dist := eval(work, miner_key, merkle_root, nonce, ts)
+	calc_dist := Eval(work, miner_key, merkle_root, nonce, ts)
 
 	return calc_dist >= Difficulty.Uint64()
 }

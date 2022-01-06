@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"math/big"
 	"os"
-	//"sort"
+	"sort"
 	"strings"
 
 	"github.com/overline-mining/gool/src/common"
@@ -61,6 +61,24 @@ func IsValidBlock(block *p2p_pb.BcBlock) (bool, error) {
 			zap.S().Errorf(errStr)
 			return false, errors.New(errStr)
 		}
+	}
+
+	if !IsDistanceAboveDifficulty(block) {
+		errStr := fmt.Sprintf("%v failed: IsDistanceAboveDifficulty at height %v", common.BriefHash(block.GetHash()), block.GetHeight())
+		zap.S().Errorf(errStr)
+		return false, errors.New(errStr)
+	}
+
+	if !IsDistanceCorrectlyCalculated(block) {
+		errStr := fmt.Sprintf("%v failed: IsDistanceCorrectlyCalculated at height %v", common.BriefHash(block.GetHash()), block.GetHeight())
+		zap.S().Errorf(errStr)
+		return false, errors.New(errStr)
+	}
+
+	if !IsValidBlockTime(block) {
+		errStr := fmt.Sprintf("%v failed: IsValidBlockTime at height %v", common.BriefHash(block.GetHash()), block.GetHeight())
+		zap.S().Errorf(errStr)
+		return false, errors.New(errStr)
 	}
 
 	return true, nil
@@ -179,9 +197,97 @@ func IsMerkleRootCorrectlyCalculated(block *p2p_pb.BcBlock) bool {
 		merkleRoot = olhash.Blake2bl(merkleRoot + h)
 	}
 
-	zap.S().Debugf("Calculated MerkleRoot %v == %v (expected)", merkleRoot, expectedMerkle)
+	//zap.S().Debugf("Calculated MerkleRoot %v == %v (expected)", merkleRoot, expectedMerkle)
 
 	return expectedMerkle == merkleRoot
+}
+
+func IsDistanceAboveDifficulty(block *p2p_pb.BcBlock) bool {
+	receivedDistance, success := new(big.Int).SetString(block.GetDistance(), 10)
+	if receivedDistance == nil {
+		return success
+	}
+	receivedDifficulty, success := new(big.Int).SetString(block.GetDifficulty(), 10)
+	if receivedDifficulty == nil {
+		return success
+	}
+	return (receivedDistance.Cmp(receivedDifficulty) == 1)
+}
+
+func IsDistanceCorrectlyCalculated(block *p2p_pb.BcBlock) bool {
+	// we have to use a tolerance here because of javascript's weird floating point
+	// implementation
+	const tolValue = uint64(10)
+	tol := new(big.Int).SetUint64(tolValue)
+	work := prepareWork(block)
+	reCalcDistance := olhash.EvalString(work, block.GetMiner(), block.GetMerkleRoot(), block.GetNonce(), block.GetTimestamp())
+	reCalcDistanceBN := new(big.Int).SetUint64(reCalcDistance)
+	distance, success := new(big.Int).SetString(block.GetDistance(), 10)
+	if !success {
+		return false
+	}
+	diff := new(big.Int).Sub(reCalcDistanceBN, distance)
+	diff.Abs(diff)
+	if diff.Uint64() != 0 {
+		zap.S().Warnf("Distances different but within tolerance: %v != %v", reCalcDistanceBN, distance)
+	}
+	return diff.Cmp(tol) <= 0
+}
+
+func IsValidBlockTime(block *p2p_pb.BcBlock) bool {
+	const (
+		timeWindowVal = uint64(2855000)
+		timeValHeight = uint64(5900000)
+	)
+
+	if block.GetHeight() < timeValHeight {
+		return true
+	}
+
+	timeWindow := new(big.Int).SetUint64(timeWindowVal)
+
+	timestamp := new(big.Int).SetUint64(block.GetTimestamp())
+	timestamp.Mul(timestamp, new(big.Int).SetUint64(1000))
+	sortedHeaders := timeSortedBlockHeaders(block.GetBlockchainHeaders())
+	newest := new(big.Int).SetUint64(sortedHeaders[0].GetTimestamp())
+	oldest := new(big.Int).SetUint64(sortedHeaders[len(sortedHeaders)-1].GetTimestamp())
+
+	if new(big.Int).Add(newest, timeWindow).Cmp(timestamp) == -1 {
+		if new(big.Int).Add(oldest, timeWindow).Cmp(timestamp) == 1 {
+			return true
+		}
+		return false
+	}
+	return true
+}
+
+func timeSortedBlockHeaders(headers *p2p_pb.BlockchainHeaders) []*p2p_pb.BlockchainHeader {
+	out := make([]*p2p_pb.BlockchainHeader, 0)
+	out = append(out, headers.GetBtc()...)
+	out = append(out, headers.GetEth()...)
+	out = append(out, headers.GetLsk()...)
+	out = append(out, headers.GetNeo()...)
+	out = append(out, headers.GetWav()...)
+
+	sort.Slice(out, func(i, j int) bool {
+		if out[j].GetTimestamp() == out[i].GetTimestamp() {
+			return out[j].GetHeight() < out[i].GetHeight()
+		}
+		return out[j].GetTimestamp() < out[i].GetTimestamp()
+	})
+
+	return out
+}
+
+func prepareWork(block *p2p_pb.BcBlock) string {
+	prevHashBytes, err := hex.DecodeString(block.GetPreviousHash())
+	if err != nil {
+		zap.S().Fatalf("Fatal error: %s", err.Error())
+		os.Exit(1)
+	}
+	childHashes := getChildrenBlocksHashes(block.GetBlockchainHeaders(), block.GetHeight())
+	rootHash := getChildrenRootHash(childHashes)
+	return olhash.Blake2bl(rootHash.Xor(rootHash, new(big.Int).SetBytes(prevHashBytes)).String())
 }
 
 func headerListIsOrderedByHeight(hlist []*p2p_pb.BlockchainHeader) bool {

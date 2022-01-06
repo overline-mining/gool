@@ -173,7 +173,7 @@ func (mh *OverlineMessageHandler) Run() {
 		mh.Mu.Lock()
 		newMessage := OverlineMessage{Type: msgType, PeerID: mh.Peer.ID, Value: bytes.Join(parts[1:], []byte(messages.SEPARATOR))}
 		*mh.Messages = append(*mh.Messages, newMessage)
-		zap.S().Debugf("OverlineMessageHandler::Run -> Appended message to queue: %v %v %v", newMessage.Type, newMessage.PeerID, len(newMessage.Value))
+		zap.S().Debugf("OverlineMessageHandler::Run -> Appended message to queue: %v %v %v", newMessage.Type, hex.EncodeToString(newMessage.PeerID), len(newMessage.Value))
 		mh.Mu.Unlock()
 	}
 }
