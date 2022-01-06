@@ -1,12 +1,17 @@
 package common
 
 import (
+	"fmt"
 	"os"
 	"strings"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
+
+func BriefHash(hash string) string {
+	return fmt.Sprintf("[%s...%s]", hash[:8], hash[len(hash)-8:])
+}
 
 func SetupLogger(level string) (*zap.Logger, *zap.SugaredLogger) {
 	al := zap.NewAtomicLevel()
