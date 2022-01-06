@@ -36,6 +36,7 @@ import (
 	p2p_pb "github.com/overline-mining/gool/src/protos"
 	"github.com/overline-mining/gool/src/validation"
 	lz4 "github.com/pierrec/lz4/v4"
+	progressbar "github.com/schollz/progressbar/v3"
 	bolt "go.etcd.io/bbolt"
 	"google.golang.org/protobuf/proto"
 )
@@ -177,6 +178,15 @@ func (mh *OverlineMessageHandler) Run() {
 	}
 }
 
+func PrintProgramHeader() {
+	zap.S().Info("  .-.      ")
+	zap.S().Info(" (o o) boo!")
+	zap.S().Info(" | O \\     ")
+	zap.S().Info("  \\   \\    ")
+	zap.S().Info("   `~~~')  ")
+	zap.S().Infof("GoOL (/ɡuːl/) version: %s", common.GetVersion())
+}
+
 func main() {
 	flag.Parse()
 
@@ -196,6 +206,8 @@ func main() {
 
 	common.SetupLogger(*logLevel)
 
+	PrintProgramHeader()
+
 	//ctx, cancel := context.WithCancel(context.Background())
 
 	/*
@@ -208,7 +220,6 @@ func main() {
 
 		zap.S().Info(ntpTime)
 	*/
-	zap.S().Info(messages.HANDSHAKE)
 
 	// database testing
 	db, err := bolt.Open(*dbFilePath, 0600, nil)
@@ -233,12 +244,17 @@ func main() {
 		decompressionBuf := make([]byte, 0x3000000) // 50MB should be enough to cover
 		if *validateFullChain {
 			err = db.View(func(tx *bolt.Tx) error {
-				zap.S().Debug("Performing complete validation of chain before connecting.")
+				zap.S().Info("Performing complete validation of chain before connecting.")
 				heights := tx.Bucket([]byte("OVERLINE-BLOCK-HEIGHT-TO-HASH"))
 				chunks := tx.Bucket([]byte("OVERLINE-BLOCK-CHUNKS"))
 				block2chunk := tx.Bucket([]byte("OVERLINE-BLOCK-CHUNK-MAP"))
 
 				c := heights.Cursor()
+
+				lastHeightBytes, _ := c.Last()
+				lastHeight := binary.BigEndian.Uint64(lastHeightBytes)
+				bar := progressbar.Default(int64(lastHeight))
+
 				seek := uint64(1) //uint64(2171001) //uint64(1074498) //uint64(1074552) //uint64(202669)
 				seekBytes := make([]byte, 8)
 				binary.BigEndian.PutUint64(seekBytes, seek)
@@ -279,10 +295,9 @@ func main() {
 						zap.S().Debugf("Valid block %v has height %v, expecting %v", common.BriefHash(block.GetHash()), block.GetHeight(), height)
 					} else {
 						zap.S().Debugf("Invalid block %v has height %v, expecting %v", common.BriefHash(block.GetHash()), block.GetHeight(), height)
-					}
-					if !isValid {
 						return err
 					}
+					bar.Add(1)
 				}
 				return nil
 			})

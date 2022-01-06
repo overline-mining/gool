@@ -229,7 +229,7 @@ func IsDistanceCorrectlyCalculated(block *p2p_pb.BcBlock) bool {
 	diff := new(big.Int).Sub(reCalcDistanceBN, distance)
 	diff.Abs(diff)
 	if diff.Uint64() != 0 {
-		zap.S().Warnf("Distances different but within tolerance: %v != %v", reCalcDistanceBN, distance)
+		zap.S().Debugf("Distances different but within tolerance: %v != %v", reCalcDistanceBN, distance)
 	}
 	return diff.Cmp(tol) <= 0
 }
