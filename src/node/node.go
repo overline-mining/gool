@@ -267,6 +267,8 @@ func main() {
 		zap.S().Infof("The LastWrittenBlockHeight is: %d", startingHeight)
 		return nil
 	})
+
+  //MissingBlocks := make([]uint64, 0)
 	if err != nil {
 		zap.S().Warn("Blockchain file was uninitialized - will sync from genesis")
 		startingHeight = 0
@@ -285,13 +287,13 @@ func main() {
 				lastHeight := binary.BigEndian.Uint64(lastHeightBytes)
 				bar := progressbar.Default(int64(lastHeight))
 
-				seek := uint64(1) //uint64(2171001) //uint64(1074498) //uint64(1074552) //uint64(202669)
+				seek := uint64(2) //uint64(2171001) //uint64(1074498) //uint64(1074552) //uint64(202669)
 				seekBytes := make([]byte, 8)
 				binary.BigEndian.PutUint64(seekBytes, seek)
 
 				currentChunk := make([]byte, 32)
 				blockMap := make(map[string]*p2p_pb.BcBlock)
-				for k, v := c.Seek(seekBytes); k != nil; k, v = c.Next() {
+				for k, v := c.Seek(seekBytes); k !=nil; k, v = c.Next() {
 					height := binary.BigEndian.Uint64(k)
 					hash := hex.EncodeToString(v)
 					chunkHash := block2chunk.Get(v)
@@ -323,6 +325,38 @@ func main() {
 					}
 					if isValid {
 						zap.S().Debugf("Valid block %v has height %v, expecting %v", common.BriefHash(block.GetHash()), block.GetHeight(), height)
+						var prevBlock *p2p_pb.BcBlock
+            if _, ok := blockMap[block.GetPreviousHash()]; !ok {
+              zap.S().Debugf("Block's previous hash %v was not in chunk!", block.GetPreviousHash())
+              temp := p2p_pb.BcBlocks{}
+              prevKey, err := hex.DecodeString(block.GetPreviousHash())
+              prevChunkHash := block2chunk.Get(prevKey)
+              prevChunk := chunks.Get(prevChunkHash)
+              nDecompressed, err := lz4.UncompressBlock(prevChunk, decompressionBuf[0:])
+              if err != nil {
+                return err
+              }
+              err = proto.Unmarshal(decompressionBuf[:nDecompressed], &temp)
+              if err != nil {
+                return err
+              }
+              for _, blk := range temp.Blocks {
+                if blk.GetHash() == block.GetPreviousHash() {
+                  zap.S().Debugf("Found previous hash -> %v", blk.GetHash())
+                  prevBlock = blk
+                  break
+                }
+              }
+            } else {
+              prevBlock = blockMap[block.GetPreviousHash()]
+            } 
+     				if !validation.OrderedBlockPairIsValid(prevBlock, block) {
+              errstr := fmt.Sprintf("%v -> %v does not form a valid chain", prevBlock.GetHash(), block.GetHash())
+              zap.S().Debug(errstr)
+              return errors.New(errstr)
+            } else {
+              zap.S().Debugf("%v -> %v forms a valid chain", prevBlock.GetHash(), block.GetHash())              
+            }
 					} else {
 						zap.S().Debugf("Invalid block %v has height %v, expecting %v", common.BriefHash(block.GetHash()), block.GetHeight(), height)
 						return err
