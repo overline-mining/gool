@@ -28,7 +28,7 @@ func FromASM(asmIn string, version uint8) ([]byte, error) {
 			out = append(out, abyte)
 		} else {
 			if len(chunk) >= 2 && chunk[:2] == "0x" {
-				lenBytes := len(chunk) / 2
+				lenBytes := uint64(len(chunk) / 2)
 				encodedLenStr := strconv.FormatUint(uint64(len(chunk[2:])/2), 16)
 				if len(encodedLenStr)%2 != 0 {
 					encodedLenStr = fmt.Sprintf("0%s", encodedLenStr)
@@ -37,11 +37,11 @@ func FromASM(asmIn string, version uint8) ([]byte, error) {
 				if err != nil {
 					return make([]byte, 0), err
 				}
-				if lenBytes < 0xff {
+				if lenBytes < uint64(0xff) {
 					out = append(out, ASM_TO_OPCODES["OP_PUSHDATA1"])
-				} else if lenBytes < 0xffff {
+				} else if lenBytes < uint64(0xffff) {
 					out = append(out, ASM_TO_OPCODES["OP_PUSHDATA2"])
-				} else if lenBytes < 0xffffffff {
+				} else if lenBytes < uint64(0xffffffff) {
 					out = append(out, ASM_TO_OPCODES["OP_PUSHDATA4"])
 				} else {
 					return make([]byte, 0), errors.New(fmt.Sprintf("Cannot compile chunk %v", chunk))
