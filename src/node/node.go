@@ -36,7 +36,8 @@ import (
 	"github.com/overline-mining/gool/src/genesis"
 	"github.com/overline-mining/gool/src/protocol/messages"
 	p2p_pb "github.com/overline-mining/gool/src/protos"
-	"github.com/overline-mining/gool/src/transactions"
+	//"github.com/overline-mining/gool/src/transactions"
+	//db "github.com/overline-mining/gool/src/database"
 	"github.com/overline-mining/gool/src/validation"
 	lz4 "github.com/pierrec/lz4/v4"
 	progressbar "github.com/schollz/progressbar/v3"
@@ -280,12 +281,12 @@ func main() {
 	*/
 
 	// make the workdir if it does not exist
-	err = os.MkdirAll(*olWorkDir, 0777)
+	err = os.MkdirAll(*olWorkDir, 0700)
 	checkError(err)
 
 	// database testing
 	dbFilePath := filepath.Join(*olWorkDir, *dbFileName)
-	db, err := bolt.Open(dbFilePath, 0666, nil)
+	db, err := bolt.Open(dbFilePath, 0600, nil)
 	checkError(err)
 	defer db.Close()
 
@@ -301,10 +302,23 @@ func main() {
 		return nil
 	})
 
+	if err != nil {
+		zap.S().Warn("Blockchain file was uninitialized - creating genesis block")
+		startingHeight = 1
+		var gblock *p2p_pb.BcBlock
+		gblock, err = genesis.BuildGenesisBlock(*olWorkDir)
+		if err != nil {
+			zap.S().Fatal(err)
+			os.Exit(1)
+		}
+		blocks := p2p_pb.BcBlocks{Blocks: make([]*p2p_pb.BcBlock, 1)}
+		blocks.Blocks[0] = gblock
+		err = SerializeBlocks(db, blocks)
+	}
+
 	//MissingBlocks := make([]uint64, 0)
 	if err != nil {
-		zap.S().Warn("Blockchain file was uninitialized - will sync from genesis")
-		startingHeight = 0
+		zap.S().Fatal(err)
 	} else {
 		decompressionBuf := make([]byte, 0x3000000) // 50MB should be enough to cover
 		if *validateFullChain {
@@ -322,37 +336,36 @@ func main() {
 				return err
 			})
 			zap.S().Debugf("Finished validating local database height contiguity.")
-			/*
-				hashesInRanges := make(map[string]float64)
-				err = db.View(func(tx *bolt.Tx) error {
-					heights := tx.Bucket([]byte("OVERLINE-BLOCK-HEIGHT-TO-HASH"))
-					block2chunk := tx.Bucket([]byte("OVERLINE-BLOCK-CHUNK-MAP"))
-					c := heights.Cursor()
-					ntot := uint64(0)
-					hashesSeen := make(map[string]bool)
-					for k, v := c.First(); k != nil; k, v = c.Next() {
-						ntot++
-						hash := hex.EncodeToString(block2chunk.Get(v))
-						hashesSeen[hash] = true
-						if ntot%1000 == 0 {
-							for h := range hashesSeen {
-								if val, ok := hashesInRanges[h]; ok {
-									val += 1
-									hashesInRanges[h] = val
-								} else {
-									hashesInRanges[h] = 1
-								}
+			hashesInRanges := make(map[string]float64)
+			err = db.View(func(tx *bolt.Tx) error {
+				heights := tx.Bucket([]byte("OVERLINE-BLOCK-HEIGHT-TO-HASH"))
+				block2chunk := tx.Bucket([]byte("OVERLINE-BLOCK-CHUNK-MAP"))
+				c := heights.Cursor()
+				ntot := uint64(0)
+				hashesSeen := make(map[string]bool)
+				for k, v := c.First(); k != nil; k, v = c.Next() {
+					ntot++
+					hash := hex.EncodeToString(block2chunk.Get(v))
+					hashesSeen[hash] = true
+					if ntot%1000 == 0 {
+						for h := range hashesSeen {
+							if val, ok := hashesInRanges[h]; ok {
+								val += 1
+								hashesInRanges[h] = val
+							} else {
+								hashesInRanges[h] = 1
 							}
-							hashesSeen = make(map[string]bool)
 						}
+						hashesSeen = make(map[string]bool)
 					}
-					for k, v := range hashesInRanges {
-						zap.S().Debugf("%v has fragmentation rate of %v", k, v)
-					}
-					return err
-				})
-				zap.S().Debugf("Finished examining database fragmentation.")
-			*/
+				}
+				for k, v := range hashesInRanges {
+					zap.S().Debugf("%v has fragmentation rate of %v", k, v)
+				}
+				return err
+			})
+			zap.S().Debugf("Finished examining database fragmentation.")
+
 			//os.Exit(1)
 			gblock, err := genesis.BuildGenesisBlock(*olWorkDir)
 			zap.S().Debugf("Genesis block hash -> %v", gblock.GetHash())
@@ -370,7 +383,7 @@ func main() {
 				lastHeight := binary.BigEndian.Uint64(lastHeightBytes)
 				bar := progressbar.Default(int64(lastHeight))
 
-				seek := uint64(2) //uint64(2999990) //uint64(2171001) //uint64(1074498) //uint64(1074552) //uint64(202669)
+				seek := uint64(1) //uint64(2999990) //uint64(2171001) //uint64(1074498) //uint64(1074552) //uint64(202669)
 				seekBytes := make([]byte, 8)
 				binary.BigEndian.PutUint64(seekBytes, seek)
 
@@ -407,20 +420,6 @@ func main() {
 						zap.S().Errorf("%v: %v", common.BriefHash(hash), err)
 					}
 					if isValid {
-						zap.S().Debugf("Valid block %v has height %v, expecting %v", common.BriefHash(block.GetHash()), block.GetHeight(), height)
-						txBytes := block.GetTxs()[0].GetOutputs()[0].GetOutputScript()
-						zap.S().Debugf("Got transaction from block: %v", txBytes)
-						txString, err := transactions.ToASM(txBytes, 0x1)
-						checkError(err)
-						zap.S().Debugf("Rendered transaction to : \"%v\"", txString)
-						reTxBytes, err := transactions.FromASM(txString, 0x1)
-						checkError(err)
-						zap.S().Debugf("Re-rendered tx            : %v", reTxBytes)
-						for _, tx := range block.GetTxs() {
-							zap.S().Debugf("Transaction hash  : %v", tx.GetHash())
-							zap.S().Debugf("Transaction rehash: %v", transactions.TxHash(tx))
-						}
-						return nil
 						var prevBlock *p2p_pb.BcBlock
 						if _, ok := blockMap[block.GetPreviousHash()]; !ok {
 							zap.S().Debugf("Block's previous hash %v was not in chunk!", block.GetPreviousHash())
@@ -445,6 +444,14 @@ func main() {
 							}
 						} else {
 							prevBlock = blockMap[block.GetPreviousHash()]
+						}
+						if prevBlock == nil {
+							if block.GetHeight() == 1 {
+								zap.S().Debugf("Genesis block does not have a previous block to find.")
+							} else {
+								zap.S().Warnf("Could not find previous hash for block %v", block.GetHash())
+							}
+							continue
 						}
 						if !validation.OrderedBlockPairIsValid(prevBlock, block) {
 							errstr := fmt.Sprintf("%v -> %v does not form a valid chain", prevBlock.GetHash(), block.GetHash())

@@ -6,8 +6,10 @@ COPY ./go.* /go/gool/
 COPY ./Makefile /go/gool/
 COPY ./build /go/gool/build
 COPY ./src /go/gool/src
-
-RUN cd gool && make
+COPY ./data /go/gool/data
+  
+RUN cd gool && make \
+     && gunzip /go/gool/data/genesis/at_genesis_balances.csv.gz
 
 FROM debian:bullseye-slim
 
@@ -23,9 +25,12 @@ EXPOSE 16061
 
 USER gool:gool
 
-RUN mkdir -p /opt/gool/bin
+RUN mkdir -p /opt/gool/bin \
+     && mkdir -p /opt/gool/.overline \
+     && mkdir -p /opt/gool/.overline/data/genesis
 COPY LICENSE ./
 COPY --from=builder --chown=gool:gool /go/gool/build/bin /opt/gool/bin
+COPY --from=builder --chown=gool:gool /go/gool/data/genesis/at_genesis_balances.csv /opt/gool/.overline/data/genesis/
 
 ENTRYPOINT ["/opt/gool/bin/node", "-ol-workdir=/opt/gool/.overline"]
 
