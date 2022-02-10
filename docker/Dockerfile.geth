@@ -1,0 +1,39 @@
+FROM debian:bullseye-slim as builder
+
+ARG GETH_VERSION=1.10.15-8be800ff
+  
+WORKDIR /root
+
+COPY docker/geth-arch.sh ./
+
+RUN apt-get update && apt-get install -y wget
+RUN wget https://gethstore.blob.core.windows.net/builds/geth-linux-$(./geth-arch.sh)-${GETH_VERSION}.tar.gz \
+     && tar -xzf geth-linux-$(./geth-arch.sh)-${GETH_VERSION}.tar.gz \
+     && rm -rf geth-linux-$(./geth-arch.sh)-${GETH_VERSION}.tar.gz \
+     && mv geth-linux-$(./geth-arch.sh)-${GETH_VERSION} geth
+
+
+FROM debian:bullseye-slim
+
+RUN groupadd -r -g 1101 ethereum \
+     && useradd --no-log-init -r -u 1101 -g ethereum ethereum \
+     && mkdir -p /opt/ethereum \
+     && mkdir -p /data \
+     && chown ethereum -R /opt/ethereum \
+     && chgrp ethereum -R /opt/ethereum \
+     && chown ethereum -R /data \
+     && chgrp ethereum -R /data
+
+WORKDIR /opt/ethereum
+
+USER ethereum:ethereum
+
+RUN mkdir -p /opt/ethereum/bin
+COPY --from=builder --chown=ethereum:ethereum /root/geth/geth /opt/ethereum/bin
+COPY --from=builder --chown=ethereum:ethereum /root/geth/COPYING /opt/ethereum/
+
+ENTRYPOINT ["/opt/ethereum/bin/geth", "--datadir=/data", "--syncmode=light"]
+
+CMD ["--help"]
+
+EXPOSE 30303
