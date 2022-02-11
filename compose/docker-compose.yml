@@ -15,7 +15,8 @@ services:
     image: local/bitcoin-core:latest
     expose:
     - "8333"
-    command: ["-chain=main"]
+    - "8332"
+    command: ["-chain=main -server -rpcbind=:8332 -rpcallowip=0.0.0.0/0"]
   neo:
     image: local/neo:latest
   waves:
