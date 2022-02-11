@@ -6,8 +6,8 @@ mkdir -p go
 export GOPATH=$(pwd)/go
 PATH="$PATH:$(go env GOPATH)/bin"
 
-go install google.golang.org/protobuf/cmd/protoc-gen-go
-go install google.golang.org/grpc/cmd/protoc-gen-go-grpc
+go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
 
 git clone https://github.com/blockcollider/overline-proto.git
 pushd overline-proto/protos
