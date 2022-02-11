@@ -28,4 +28,4 @@ jobs:
           author: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
           branch: "bot-upgrade-protos"
           body: |
-            Updates the the protobuf spec for overline have been found.
+            Updates to the protobuf spec for overline have been found.
