@@ -1,0 +1,36 @@
+FROM debian:bullseye-slim as builder
+
+ARG BTCD_VERSION=22.0
+
+WORKDIR /root
+
+COPY docker/btc-arch.sh ./
+
+RUN apt-get update && apt-get install -y wget    
+RUN wget https://bitcoincore.org/bin/bitcoin-core-${BTCD_VERSION}/bitcoin-${BTCD_VERSION}-$(./btc-arch.sh).tar.gz \
+     && tar -xzf bitcoin-${BTCD_VERSION}-$(./btc-arch.sh).tar.gz \
+     && rm -rf bitcoin-${BTCD_VERSION}-$(./btc-arch.sh).tar.gz \
+     && mv bitcoin-${BTCD_VERSION} bitcoin
+
+FROM debian:bullseye-slim
+
+RUN groupadd -r -g 1102 bitcoind \
+     && useradd --no-log-init -r -u 1102 -g bitcoind bitcoind \
+     && mkdir -p /opt/bitcoin \
+     && mkdir -p /data \
+     && chown bitcoind -R /opt/bitcoin \
+     && chgrp bitcoind -R /opt/bitcoin \
+     && chown bitcoind -R /data \
+     && chgrp bitcoind -R /data
+
+WORKDIR /opt/bitcoin
+
+USER bitcoind:bitcoind
+
+COPY --from=builder --chown=bitcoind:bitcoind /root/bitcoin/bin /opt/bitcoin/bin
+
+ENTRYPOINT ["/opt/bitcoin/bin/bitcoind", "-datadir=/data", "-prune=1024"]
+
+CMD ["--help"]
+
+EXPOSE 8333

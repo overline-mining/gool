@@ -1,0 +1,28 @@
+FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:3.1 AS Build
+
+COPY neo-cli /neo-cli
+COPY NuGet.Config /neo-cli
+
+WORKDIR /neo-cli
+RUN dotnet restore && dotnet publish -c Release -o /app
+
+FROM mcr.microsoft.com/dotnet/aspnet:3.1 AS Final
+RUN apt-get update \
+     && apt-get install -y \
+        screen \
+        libleveldb-dev \
+        sqlite3 \
+     && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd -r -g 1103 neo \
+     && useradd --no-log-init -r -u 1103 -g neo neo \
+     && mkdir -p /neo-cli \
+     && chown -R neo /neo-cli \
+     && chgrp -R neo /neo-cli
+
+WORKDIR /neo-cli
+COPY --from=Build --chown=neo:neo /app .
+
+USER neo:neo
+
+ENTRYPOINT ["screen", "-DmS", "node", "dotnet","neo-cli.dll", "-r"]

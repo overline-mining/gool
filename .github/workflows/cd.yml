@@ -6,7 +6,7 @@ on:
     - v*.*.*
 
 jobs:
-  buildx:
+  gool:
     runs-on: ubuntu-latest
     steps:
       -
@@ -28,5 +28,136 @@ jobs:
           TAG=$(git describe --tags --abbrev=0)
           BUILD=$(git rev-parse --short HEAD)
           VERSION=${TAG}-g${BUILD}
-          docker buildx build --platform linux/amd64,linux/arm/v7,linux/arm64 --tag ${{ secrets.DOCKERHUB_ACCOUNT }}/gool:${VERSION} -f Dockerfile . --push
-          docker buildx build --platform linux/amd64,linux/arm/v7,linux/arm64 --tag ${{ secrets.DOCKERHUB_ACCOUNT }}/gool:latest -f Dockerfile . --push
+
+          docker buildx build --platform linux/amd64,linux/arm/v7,linux/arm64 --tag ${{ secrets.DOCKERHUB_ACCOUNT }}/gool:${VERSION} -f docker/Dockerfile.gool . --push
+          docker buildx build --platform linux/amd64,linux/arm/v7,linux/arm64 --tag ${{ secrets.DOCKERHUB_ACCOUNT }}/gool:latest -f docker/Dockerfile.gool . --push
+
+  geth:
+    runs-on: ubuntu-latest
+    steps:
+      -
+        name: Checkout
+        uses: actions/checkout@v2
+      -
+        name: Set up QEMU
+        uses: docker/setup-qemu-action@v1
+      -
+        name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v1
+      -
+        name: Log into registry
+        run: echo "${{ secrets.DOCKERHUB_ACCESS_TOKEN }}" | docker login -u ${{ secrets.DOCKERHUB_ACCOUNT }} --password-stdin
+      -
+        name: Build and push all targets
+        run: |
+          TAG=$(git describe --tags --abbrev=0)
+          BUILD=$(git rev-parse --short HEAD)
+          VERSION=${TAG}-g${BUILD}
+
+          docker buildx build --platform linux/amd64,linux/arm/v7,linux/arm64 --tag ${{ secrets.DOCKERHUB_ACCOUNT }}/geth:${VERSION} -f docker/Dockerfile.geth . --push
+          docker buildx build --platform linux/amd64,linux/arm/v7,linux/arm64 --tag ${{ secrets.DOCKERHUB_ACCOUNT }}/geth:latest -f docker/Dockerfile.geth . --push
+
+  bitcoind:
+    runs-on: ubuntu-latest
+    steps:
+      -
+        name: Checkout
+        uses: actions/checkout@v2
+      -
+        name: Set up QEMU
+        uses: docker/setup-qemu-action@v1
+      -
+        name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v1
+      -
+        name: Log into registry
+        run: echo "${{ secrets.DOCKERHUB_ACCESS_TOKEN }}" | docker login -u ${{ secrets.DOCKERHUB_ACCOUNT }} --password-stdin
+      -
+        name: Build and push all targets
+        run: |
+          TAG=$(git describe --tags --abbrev=0)
+          BUILD=$(git rev-parse --short HEAD)
+          VERSION=${TAG}-g${BUILD}
+
+          docker buildx build --platform linux/amd64,linux/arm/v7,linux/arm64 --tag ${{ secrets.DOCKERHUB_ACCOUNT }}/bitcoin-core:${VERSION} -f docker/Dockerfile.bitcoin-core . --push
+          docker buildx build --platform linux/amd64,linux/arm/v7,linux/arm64 --tag ${{ secrets.DOCKERHUB_ACCOUNT }}/bitcoin-core:latest -f docker/Dockerfile.bitcoin-core . --push
+
+  waves:
+    runs-on: ubuntu-latest
+    steps:
+      -
+        name: Checkout
+        uses: actions/checkout@v2
+      -
+        name: Set up QEMU
+        uses: docker/setup-qemu-action@v1
+      -
+        name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v1
+      -
+        name: Log into registry
+        run: echo "${{ secrets.DOCKERHUB_ACCESS_TOKEN }}" | docker login -u ${{ secrets.DOCKERHUB_ACCOUNT }} --password-stdin
+      -
+        name: Build and push all targets
+        run: |
+          TAG=$(git describe --tags --abbrev=0)
+          BUILD=$(git rev-parse --short HEAD)
+          VERSION=${TAG}-g${BUILD}
+
+          docker/build-waves.sh linux/amd64,linux/arm/v7,linux/arm64 ${{ secrets.DOCKERHUB_ACCOUNT }} ${VERSION} --push
+          docker/build-waves.sh linux/amd64,linux/arm/v7,linux/arm64 ${{ secrets.DOCKERHUB_ACCOUNT }} latest --push
+
+  neo:
+    runs-on: ubuntu-latest
+    steps:
+      -
+        name: Checkout
+        uses: actions/checkout@v2
+      -
+        name: Set up QEMU
+        uses: docker/setup-qemu-action@v1
+      -
+        name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v1
+      -
+        name: Log into registry
+        run: echo "${{ secrets.DOCKERHUB_ACCESS_TOKEN }}" | docker login -u ${{ secrets.DOCKERHUB_ACCOUNT }} --password-stdin
+      -
+        name: Build and push all targets
+        run: |
+          TAG=$(git describe --tags --abbrev=0)
+          BUILD=$(git rev-parse --short HEAD)
+          VERSION=${TAG}-g${BUILD}
+
+          docker/build-neo.sh linux/amd64,linux/arm/v7,linux/arm64 ${{ secrets.DOCKERHUB_ACCOUNT }} ${VERSION} --push
+          docker/build-neo.sh linux/amd64,linux/arm/v7,linux/arm64 ${{ secrets.DOCKERHUB_ACCOUNT }} latest --push
+  
+  lisk:
+    runs-on: ubuntu-latest
+    steps:
+      -
+        name: Checkout
+        uses: actions/checkout@v2
+      -
+        name: Set up QEMU
+        uses: docker/setup-qemu-action@v1
+      -
+        name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v1
+      -
+        name: Log into registry
+        run: echo "${{ secrets.DOCKERHUB_ACCESS_TOKEN }}" | docker login -u ${{ secrets.DOCKERHUB_ACCOUNT }} --password-stdin
+      -
+        name: Build and push all targets
+        run: |
+          TAG=$(git describe --tags --abbrev=0)
+          BUILD=$(git rev-parse --short HEAD)
+          VERSION=${TAG}-g${BUILD}
+
+          docker/build-lisk.sh linux/amd64,linux/arm/v7,linux/arm64 ${{ secrets.DOCKERHUB_ACCOUNT }} ${VERSION} --push
+          docker/build-lisk.sh linux/amd64,linux/arm/v7,linux/arm64 ${{ secrets.DOCKERHUB_ACCOUNT }} latest --push

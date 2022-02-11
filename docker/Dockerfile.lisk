@@ -1,0 +1,34 @@
+ARG NODEJS_VERSION=12
+FROM node:$NODEJS_VERSION-bullseye-slim
+
+ARG CORE_VERSION
+ARG REGISTRY_URL
+ARG REGISTRY_AUTH_TOKEN
+  
+ENV NODE_ENV=production
+
+RUN apt-get update \
+     && apt-get install -y build-essential autoconf automake libtool linux-headers-$TARGETPLATFORM python3 \
+     && rm -rf /var/lib/apt/lists/*
+
+RUN addgroup --gid 1100 lisk && \
+    adduser --home /home/lisk --shell /bin/bash --uid 1100 --ingroup lisk --disabled-password lisk
+
+USER lisk
+WORKDIR /home/lisk
+
+RUN if [ -n "$REGISTRY_URL" ]; then \
+      echo -e "registry=$REGISTRY_URL/\n${REGISTRY_URL#*:}/:_authToken=$REGISTRY_AUTH_TOKEN" >/home/lisk/.npmrc; \
+    fi
+RUN npm install lisk-core@$CORE_VERSION && \
+    rm -f /home/lisk/.npmrc
+
+USER root
+RUN apt-get remove -y build-essential autoconf automake libtool python3 && apt-get autoremove -y
+
+USER lisk
+RUN mkdir /home/lisk/.lisk
+VOLUME ["/home/lisk/.lisk"]
+
+ENTRYPOINT ["/home/lisk/node_modules/.bin/lisk-core"]
+CMD ["start", "--network", "mainnet"]
