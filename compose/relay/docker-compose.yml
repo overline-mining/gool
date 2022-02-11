@@ -1,0 +1,5 @@
+services:
+  # gool node
+  gool:
+    image: local/gool:latest
+    command: ["-blockchain-type=mainnet"]
