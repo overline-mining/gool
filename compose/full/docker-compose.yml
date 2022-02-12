@@ -3,25 +3,43 @@ services:
   gool:
     image: local/gool:latest
     command: ["-blockchain-type=mainnet"]
+    ports:
+    - "16061:16061"
   # child-chain nodes
   ethereum:
     image: local/geth:latest
+    ports:
+    - "30303:30303"
     expose:
     - "8545"
     - "8546"
-    - "30303"
     command: "--mainnet --http --http.api eth,net --http.addr 0.0.0.0 --http.port 8545 --http.vhosts=*"
   bitcoin:
     image: local/bitcoin-core:latest
+    ports:
+    - "8333:8333"
     expose:
-    - "8333"
     - "8332"
     command: "-chain=main -server -rpcbind=:8332 -rpcallowip=0.0.0.0/0"
   neo:
     image: local/neo:latest
+    ports:
+    - "10333:10333"
+    expose:
+    - "10332"
   waves:
     image: local/waves:latest
     environment:
+    - JAVA_OPTS="-Dwaves.network.declared-address=0.0.0.0:6868 -Dwaves.rest-api.port=6869 -Dwaves.rest-api.bind-address=0.0.0.0 -Dwaves.rest-api.enable=yes"
     - WAVES_WALLET_PASSWORD=testtest
+    ports:
+    - "6868:6868"
+    expose:
+    - "6869"
   lisk:
     image: local/lisk:latest
+    ports:
+    - "8001:8001"
+    expose:
+    - "8000"
+    command: "start --api-ipc --enable-http-api-plugin --http-api-plugin-port 8000 --http-api-plugin-host 0.0.0.0 --http-api-plugin-whitelist 0.0.0.0/0"

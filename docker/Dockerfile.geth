@@ -26,6 +26,10 @@ RUN groupadd -r -g 1101 ethereum \
 
 WORKDIR /opt/ethereum
 
+EXPOSE 30303
+EXPOSE 8545
+EXPOSE 8546
+
 USER ethereum:ethereum
 
 RUN mkdir -p /opt/ethereum/bin
@@ -35,5 +39,3 @@ COPY --from=builder --chown=ethereum:ethereum /root/geth/COPYING /opt/ethereum/
 ENTRYPOINT ["/opt/ethereum/bin/geth", "--datadir=/data", "--syncmode=light"]
 
 CMD ["--help"]
-
-EXPOSE 30303

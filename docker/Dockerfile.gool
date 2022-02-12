@@ -19,6 +19,8 @@ RUN groupadd -r -g 1099 gool \
 
 WORKDIR /opt/gool
 
+EXPOSE 16061
+
 USER gool:gool
 
 RUN mkdir -p /opt/gool/bin
