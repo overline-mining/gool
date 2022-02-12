@@ -23,6 +23,13 @@ RUN groupadd -r -g 1103 neo \
 WORKDIR /neo-cli
 COPY --from=Build --chown=neo:neo /app .
 
+EXPOSE 10332
+EXPOSE 10333
+
 USER neo:neo
+
+COPY --chown=neo:neo neo-config.json ./config.json
+COPY --chown=neo:neo install-neo-plugins.sh ./install-neo-plugins.sh
+RUN ./install-neo-plugins.sh
 
 ENTRYPOINT ["screen", "-DmS", "node", "dotnet","neo-cli.dll", "-r"]

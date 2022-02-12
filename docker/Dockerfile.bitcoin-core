@@ -25,6 +25,9 @@ RUN groupadd -r -g 1102 bitcoind \
 
 WORKDIR /opt/bitcoin
 
+EXPOSE 8333
+EXPOSE 8332
+
 USER bitcoind:bitcoind
 
 COPY --from=builder --chown=bitcoind:bitcoind /root/bitcoin/bin /opt/bitcoin/bin
@@ -32,5 +35,3 @@ COPY --from=builder --chown=bitcoind:bitcoind /root/bitcoin/bin /opt/bitcoin/bin
 ENTRYPOINT ["/opt/bitcoin/bin/bitcoind", "-datadir=/data", "-prune=1024"]
 
 CMD ["--help"]
-
-EXPOSE 8333
