@@ -20,7 +20,7 @@ pushd neo-node
 
 sed -i 's/netcoreapp2.1/netcoreapp3.1/' neo-cli/neo-cli.csproj
 
-docker buildx build --platform ${ARCH} --tag ${REPO_NAME}/neo:${GOOL_VERSION} . ${DO_PUSH}
+docker buildx build --platform ${ARCH} --build-arg NEO_VERSION=${NEO_VERSION} --tag ${REPO_NAME}/neo:${GOOL_VERSION} . ${DO_PUSH}
 
 popd
 

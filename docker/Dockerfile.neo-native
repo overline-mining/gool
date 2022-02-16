@@ -7,11 +7,15 @@ WORKDIR /neo-cli
 RUN dotnet restore && dotnet publish -c Release -o /app
 
 FROM mcr.microsoft.com/dotnet/aspnet:3.1 AS Final
+
+ARG NEO_VERSION
+
 RUN apt-get update \
      && apt-get install -y \
         screen \
         libleveldb-dev \
         sqlite3 \
+        unzip \
      && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd -r -g 1103 neo \
@@ -30,6 +34,6 @@ USER neo:neo
 
 COPY --chown=neo:neo neo-config.json ./config.json
 COPY --chown=neo:neo install-neo-plugins.sh ./install-neo-plugins.sh
-RUN ./install-neo-plugins.sh
+RUN ./install-neo-plugins.sh ${NEO_VERSION}
 
 ENTRYPOINT ["screen", "-DmS", "node", "dotnet","neo-cli.dll", "-r"]

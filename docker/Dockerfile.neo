@@ -1,7 +1,7 @@
 FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:3.1 AS Build
 
 ARG TARGETPLATFORM
-
+  
 COPY neo-cli /neo-cli
 COPY NuGet.Config /neo-cli
 
@@ -16,11 +16,15 @@ RUN if [ "$TARGETPLATFORM" = "linux/amd64" ]; then \
      && dotnet restore && dotnet publish -c Release -r $RID -o /app
 
 FROM mcr.microsoft.com/dotnet/aspnet:3.1 AS Final
+
+ARG NEO_VERSION
+
 RUN apt-get update \
      && apt-get install -y \
         screen \
         libleveldb-dev \
         sqlite3 \
+        unzip \
      && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd -r -g 1103 neo \
@@ -39,6 +43,6 @@ USER neo:neo
 
 COPY --chown=neo:neo neo-config.json ./config.json
 COPY --chown=neo:neo install-neo-plugins.sh ./install-neo-plugins.sh
-RUN ./install-neo-plugins.sh
+RUN ./install-neo-plugins.sh ${NEO_VERSION}
   
 ENTRYPOINT ["screen", "-DmS", "node", "dotnet","neo-cli.dll", "-r"]
