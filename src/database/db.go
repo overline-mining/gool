@@ -145,8 +145,58 @@ func (odb *OverlineDB) AddMarkedTransaction(mtx *p2p_pb.MarkedTransaction) {
 }
 
 func (odb *OverlineDB) FlushToDisk() {
+	ChainstateBlocks := []byte("CHAINSTATE-BLOCKS")
+	ChainstateTxs := []byte("CHAINSTATE-TXS")
+	ChainstateMTxs := []byte("CHAINSTATE-MTXS")
 	odb.mu.Lock()
+	odb.txMu.Lock()
+	err := odb.db.Update(func(tx *bolt.Tx) error {
+		chainstate_blocks := tx.Bucket(ChainstateBlocks)
+		chainstate_txs := tx.Bucket(ChainstateTxs)
+		chainstate_mtxs := tx.Bucket(ChainstateMTxs)
 
+		// reset on-disk chainstates
+		if chainstate_blocks != nil {
+			tx.DeleteBucket(ChainstateBlocks)
+			chainstate_blocks, _ = tx.CreateBucket(ChainstateBlocks)
+		}
+		if chainstate_txs != nil {
+			tx.DeleteBucket(ChainstateTxs)
+			chainstate_txs, _ = tx.CreateBucket(ChainstateTxs)
+		}
+		if chainstate_mtxs != nil {
+			tx.DeleteBucket(ChainstateMTxs)
+			chainstate_mtxs, _ = tx.CreateBucket(ChainstateMTxs)
+		}
+		// fill the chainstate
+		for hash, block := range odb.incomingBlocks {
+			key, _ := hex.DecodeString(hash)
+			blockBytes, _ := proto.Marshal(block)
+			err := chainstate_blocks.Put(key, blockBytes)
+			if err != nil {
+				return err
+			}
+		}
+		for hash, tx := range odb.txMemPool {
+			key, _ := hex.DecodeString(hash)
+			txBytes, _ := proto.Marshal(tx)
+			err := chainstate_txs.Put(key, txBytes)
+			if err != nil {
+				return err
+			}
+		}
+		for hash, mtx := range odb.mtxMemPool {
+			key, _ := hex.DecodeString(hash)
+			mtxBytes, _ := proto.Marshal(mtx)
+			err := chainstate_txs.Put(key, mtxBytes)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	common.CheckError(err)
+	odb.txMu.Unlock()
 	odb.mu.Unlock()
 }
 
