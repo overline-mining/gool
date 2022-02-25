@@ -11,7 +11,7 @@ RUN wget https://bitcoincore.org/bin/bitcoin-core-${BTCD_VERSION}/bitcoin-${BTCD
      && wget https://bitcoincore.org/bin/bitcoin-core-${BTCD_VERSION}/SHA256SUMS \
      && wget https://bitcoincore.org/bin/bitcoin-core-${BTCD_VERSION}/SHA256SUMS.asc \
      && sha256sum --ignore-missing --check SHA256SUMS \
-     && gpg --keyserver hkps://keys.openpgp.org --recv-keys \
+     && gpg --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys \
         E777299FC265DD04793070EB944D35F9AC3DB76A \
         0CCBAAFD76A2ECE2CCD3141DE2FFD5B1D88CA97D \
         152812300785C96444D3334D17565732E08E5E41 \
@@ -25,7 +25,7 @@ RUN wget https://bitcoincore.org/bin/bitcoin-core-${BTCD_VERSION}/bitcoin-${BTCD
         82921A4B88FD454B7EB8CE3C796C4109063D4EAF \
         9DEAE0DC7063249FB05474681E4AED62986CD25D \
         9D3CC86A72F8494342EA5FD10A41BDC3F4FAFF1C \
-        74E2DEF5D77260B98BC19438099BAD163C70FBFA
+        74E2DEF5D77260B98BC19438099BAD163C70FBFA \
      && gpg --verify SHA256SUMS.asc \
      && tar -xzf bitcoin-${BTCD_VERSION}-$(./btc-arch.sh).tar.gz \
      && rm -rf bitcoin-${BTCD_VERSION}-$(./btc-arch.sh).tar.gz \
