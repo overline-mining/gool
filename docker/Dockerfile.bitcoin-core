@@ -6,8 +6,13 @@ WORKDIR /root
 
 COPY docker/btc-arch.sh ./
 
-RUN apt-get update && apt-get install -y wget    
+RUN apt-get update && apt-get install -y wget pgp    
 RUN wget https://bitcoincore.org/bin/bitcoin-core-${BTCD_VERSION}/bitcoin-${BTCD_VERSION}-$(./btc-arch.sh).tar.gz \
+     && wget https://bitcoincore.org/bin/bitcoin-core-${BTCD_VERSION}/SHA256SUMS \
+     && wget https://bitcoincore.org/bin/bitcoin-core-${BTCD_VERSION}/SHA256SUMS.asc \
+     && sha256sum --ignore-missing --check SHA256SUMS \
+     && gpg --keyserver hkps://keys.openpgp.org --recv-keys E777299FC265DD04793070EB944D35F9AC3DB76A \
+     && gpg --verify SHA256SUMS.asc \
      && tar -xzf bitcoin-${BTCD_VERSION}-$(./btc-arch.sh).tar.gz \
      && rm -rf bitcoin-${BTCD_VERSION}-$(./btc-arch.sh).tar.gz \
      && mv bitcoin-${BTCD_VERSION} bitcoin
