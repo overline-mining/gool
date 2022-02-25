@@ -1,13 +1,16 @@
 FROM debian:bullseye-slim as builder
 
-ARG GETH_VERSION=1.10.15-8be800ff
-  
+ARG GETH_VERSION=1.10.16-20356e57
+
 WORKDIR /root
 
 COPY docker/geth-arch.sh ./
 
-RUN apt-get update && apt-get install -y wget
+RUN apt-get update && apt-get install -y wget pgp
 RUN wget https://gethstore.blob.core.windows.net/builds/geth-linux-$(./geth-arch.sh)-${GETH_VERSION}.tar.gz \
+     && wget https://gethstore.blob.core.windows.net/builds/geth-linux-$(./geth-arch.sh)-${GETH_VERSION}.tar.gz.asc \
+     && gpg --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys 9BA28146 \
+     && gpg --verify geth-linux-$(./geth-arch.sh)-${GETH_VERSION}.tar.gz.asc \
      && tar -xzf geth-linux-$(./geth-arch.sh)-${GETH_VERSION}.tar.gz \
      && rm -rf geth-linux-$(./geth-arch.sh)-${GETH_VERSION}.tar.gz \
      && mv geth-linux-$(./geth-arch.sh)-${GETH_VERSION} geth
