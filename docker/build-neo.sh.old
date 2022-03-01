@@ -1,6 +1,6 @@
 #!/bin/bash
 
-NEO_VERSION="v"
+NEO_VERSION="v2.13.0"
 ARCH=$1
 REPO_NAME=$2
 GOOL_VERSION=$3
