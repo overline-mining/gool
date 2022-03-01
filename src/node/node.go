@@ -37,7 +37,7 @@ import (
 	"github.com/overline-mining/gool/src/protocol/messages"
 	p2p_pb "github.com/overline-mining/gool/src/protos"
 	//"github.com/overline-mining/gool/src/transactions"
-	//db "github.com/overline-mining/gool/src/database"
+	db "github.com/overline-mining/gool/src/database"
 	"github.com/overline-mining/gool/src/validation"
 	lz4 "github.com/pierrec/lz4/v4"
 	progressbar "github.com/schollz/progressbar/v3"
