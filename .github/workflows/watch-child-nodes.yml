@@ -1,4 +1,4 @@
-name: Check for new versions of bcjs protos
+name: Check for new versions of child chains
 
 on:
   workflow_dispatch:
