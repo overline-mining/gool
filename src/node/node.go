@@ -40,7 +40,7 @@ import (
 	db "github.com/overline-mining/gool/src/database"
 	"github.com/overline-mining/gool/src/validation"
 	lz4 "github.com/pierrec/lz4/v4"
-	progressbar "github.com/schollz/progressbar/v3"
+	//progressbar "github.com/schollz/progressbar/v3"
 	bolt "go.etcd.io/bbolt"
 	"google.golang.org/protobuf/proto"
 )
@@ -285,196 +285,28 @@ func main() {
 	checkError(err)
 
 	// database testing
-	dbFilePath := filepath.Join(*olWorkDir, *dbFileName)
-	db, err := bolt.Open(dbFilePath, 0600, nil)
-	checkError(err)
-	defer db.Close()
-
 	startingHeight := uint64(0)
-	err = db.View(func(tx *bolt.Tx) error {
-		b := tx.Bucket([]byte("SYNC-INFO"))
-		if b == nil {
-			return errors.New("Unitialized blockchain file!")
-		}
-		heightBytes := b.Get([]byte("LastWrittenBlockHeight"))
-		startingHeight = binary.BigEndian.Uint64(heightBytes)
-		zap.S().Infof("The LastWrittenBlockHeight is: %d", startingHeight)
-		return nil
-	})
+	dbFilePath := filepath.Join(*olWorkDir, *dbFileName)
+	gooldb := db.OverlineDB{Config: db.DefaultOverlineDBConfig()}
+	err = gooldb.Open(dbFilePath)
 
 	if err != nil {
-		zap.S().Warn("Blockchain file was uninitialized - creating genesis block")
 		startingHeight = 1
+		zap.S().Warn("Blockchain file was uninitialized - creating genesis block")
 		var gblock *p2p_pb.BcBlock
 		gblock, err = genesis.BuildGenesisBlock(*olWorkDir)
 		if err != nil {
 			zap.S().Fatal(err)
 			os.Exit(1)
 		}
-		blocks := p2p_pb.BcBlocks{Blocks: make([]*p2p_pb.BcBlock, 1)}
-		blocks.Blocks[0] = gblock
-		err = SerializeBlocks(db, blocks)
+		err = gooldb.AddBlock(gblock)
 	}
 
-	//MissingBlocks := make([]uint64, 0)
-	if err != nil {
-		zap.S().Fatal(err)
-	} else {
-		decompressionBuf := make([]byte, 0x3000000) // 50MB should be enough to cover
-		if *validateFullChain {
-			zap.S().Info("Performing complete validation of chain before connecting.")
-			err = db.View(func(tx *bolt.Tx) error {
-				heights := tx.Bucket([]byte("OVERLINE-BLOCK-HEIGHT-TO-HASH"))
-				c := heights.Cursor()
-				heightsList := make([]uint64, 0)
-				for k, _ := c.First(); k != nil; k, _ = c.Next() {
-					heightsList = append(heightsList, binary.BigEndian.Uint64(k))
-				}
-				startsAndStops, err := ExtractRanges(heightsList)
-				zap.S().Infof("startsAndStops: %v", startsAndStops)
-				zap.S().Infof("There are %v ranges in the list!", len(startsAndStops))
-				return err
-			})
-			zap.S().Debugf("Finished validating local database height contiguity.")
-			hashesInRanges := make(map[string]float64)
-			err = db.View(func(tx *bolt.Tx) error {
-				heights := tx.Bucket([]byte("OVERLINE-BLOCK-HEIGHT-TO-HASH"))
-				block2chunk := tx.Bucket([]byte("OVERLINE-BLOCK-CHUNK-MAP"))
-				c := heights.Cursor()
-				ntot := uint64(0)
-				hashesSeen := make(map[string]bool)
-				for k, v := c.First(); k != nil; k, v = c.Next() {
-					ntot++
-					hash := hex.EncodeToString(block2chunk.Get(v))
-					hashesSeen[hash] = true
-					if ntot%1000 == 0 {
-						for h := range hashesSeen {
-							if val, ok := hashesInRanges[h]; ok {
-								val += 1
-								hashesInRanges[h] = val
-							} else {
-								hashesInRanges[h] = 1
-							}
-						}
-						hashesSeen = make(map[string]bool)
-					}
-				}
-				for k, v := range hashesInRanges {
-					zap.S().Debugf("%v has fragmentation rate of %v", k, v)
-				}
-				return err
-			})
-			zap.S().Debugf("Finished examining database fragmentation.")
+	checkError(err)
+	defer gooldb.Close()
 
-			//os.Exit(1)
-			gblock, err := genesis.BuildGenesisBlock(*olWorkDir)
-			zap.S().Debugf("Genesis block hash -> %v", gblock.GetHash())
-			if err != nil {
-				zap.S().Error(err)
-			}
-			err = db.View(func(tx *bolt.Tx) error {
-				heights := tx.Bucket([]byte("OVERLINE-BLOCK-HEIGHT-TO-HASH"))
-				chunks := tx.Bucket([]byte("OVERLINE-BLOCK-CHUNKS"))
-				block2chunk := tx.Bucket([]byte("OVERLINE-BLOCK-CHUNK-MAP"))
-
-				c := heights.Cursor()
-
-				lastHeightBytes, _ := c.Last()
-				lastHeight := binary.BigEndian.Uint64(lastHeightBytes)
-				bar := progressbar.Default(int64(lastHeight))
-
-				seek := uint64(1) //uint64(2999990) //uint64(2171001) //uint64(1074498) //uint64(1074552) //uint64(202669)
-				seekBytes := make([]byte, 8)
-				binary.BigEndian.PutUint64(seekBytes, seek)
-
-				currentChunk := make([]byte, 32)
-				blockMap := make(map[string]*p2p_pb.BcBlock)
-				for k, v := c.Seek(seekBytes); k != nil; k, v = c.Next() {
-					height := binary.BigEndian.Uint64(k)
-					hash := hex.EncodeToString(v)
-					chunkHash := block2chunk.Get(v)
-					chunk := chunks.Get(chunkHash)
-
-					if bytes.Compare(currentChunk, chunkHash) != 0 {
-						blockMap = make(map[string]*p2p_pb.BcBlock) // reset the blockmap
-						nDecompressed, err := lz4.UncompressBlock(chunk, decompressionBuf[0:])
-						if err != nil {
-							return err
-						}
-						blockList := p2p_pb.BcBlocks{}
-						err = proto.Unmarshal(decompressionBuf[:nDecompressed], &blockList)
-						if err != nil {
-							return err
-						}
-						for _, block := range blockList.Blocks {
-							blockMap[block.GetHash()] = block
-						}
-						strCurrentChunk := hex.EncodeToString(currentChunk)
-						strChunkHash := hex.EncodeToString(chunkHash)
-						zap.S().Debugf("Updating chunk hash from %s to %s", common.BriefHash(strCurrentChunk), common.BriefHash(strChunkHash))
-						copy(currentChunk, chunkHash)
-					}
-					block := blockMap[hash]
-					isValid, err := validation.IsValidBlock(block)
-					if err != nil {
-						zap.S().Errorf("%v: %v", common.BriefHash(hash), err)
-					}
-					if isValid {
-						var prevBlock *p2p_pb.BcBlock
-						if _, ok := blockMap[block.GetPreviousHash()]; !ok {
-							zap.S().Debugf("Block's previous hash %v was not in chunk!", block.GetPreviousHash())
-							temp := p2p_pb.BcBlocks{}
-							prevKey, err := hex.DecodeString(block.GetPreviousHash())
-							prevChunkHash := block2chunk.Get(prevKey)
-							prevChunk := chunks.Get(prevChunkHash)
-							nDecompressed, err := lz4.UncompressBlock(prevChunk, decompressionBuf[0:])
-							if err != nil {
-								return err
-							}
-							err = proto.Unmarshal(decompressionBuf[:nDecompressed], &temp)
-							if err != nil {
-								return err
-							}
-							for _, blk := range temp.Blocks {
-								if blk.GetHash() == block.GetPreviousHash() {
-									zap.S().Debugf("Found previous hash -> %v", blk.GetHash())
-									prevBlock = blk
-									break
-								}
-							}
-						} else {
-							prevBlock = blockMap[block.GetPreviousHash()]
-						}
-						if prevBlock == nil {
-							if block.GetHeight() == 1 {
-								zap.S().Debugf("Genesis block does not have a previous block to find.")
-							} else {
-								zap.S().Warnf("Could not find previous hash for block %v", block.GetHash())
-							}
-							continue
-						}
-						if !validation.OrderedBlockPairIsValid(prevBlock, block) {
-							errstr := fmt.Sprintf("%v -> %v does not form a valid chain", prevBlock.GetHash(), block.GetHash())
-							zap.S().Debug(errstr)
-							return errors.New(errstr)
-						} else {
-							zap.S().Debugf("%v -> %v forms a valid chain", prevBlock.GetHash(), block.GetHash())
-						}
-					} else {
-						zap.S().Debugf("Invalid block %v has height %v, expecting %v", common.BriefHash(block.GetHash()), block.GetHeight(), height)
-						return err
-					}
-					bar.Add(1)
-				}
-				return nil
-			})
-			checkError(err)
-		} else {
-			zap.S().Debug("Will perform light validation of chain once connected.")
-		}
-	}
-
-	os.Exit(1)
+	// start the gool ingestion thread
+	gooldb.Run()
 
 	id_bytes := make([]byte, 32)
 	rand.Read(id_bytes)
@@ -578,8 +410,6 @@ func main() {
 
 	dhtServer.Announce(infoHash, 0, false)
 
-	blockChunkSize := 1000
-	blockBuffer := make(map[string]*p2p_pb.BcBlock)
 	olMessageMu := sync.Mutex{}
 	olMessages := make([]OverlineMessage, 0)
 	olHandlerMapMu := sync.Mutex{}
@@ -639,39 +469,23 @@ func main() {
 						blocks := p2p_pb.BcBlocks{}
 						err = proto.Unmarshal(oneMessage.Value, &blocks)
 						if err == nil {
-							for _, block := range blocks.Blocks {
-								isValid, err := validation.IsValidBlock(block)
-								if isValid {
-									blockBuffer[block.GetHash()] = block
-								} else {
-									zap.S().Warnf("Not serializing invalid block %v: %v", common.BriefHash(block.GetHash()), err)
-								}
-							}
+							gooldb.AddBlockRange(&blocks)
 						} else {
 							zap.S().Error(err)
 						}
-						if len(blockBuffer) < blockChunkSize {
-							zap.S().Infof("Received DATA: Saved %v new blocks to buffer (%v)!", len(blocks.Blocks), len(blockBuffer))
-						} else {
-							blocks = p2p_pb.BcBlocks{}
-							for hash, block := range blockBuffer {
-								blocks.Blocks = append(blocks.Blocks, block)
-								delete(blockBuffer, hash)
-							}
-							go SerializeBlocks(db, blocks)
-							zap.S().Infof("Received DATA: Serialized %v new blocks!", len(blocks.Blocks))
-						}
 					case messages.BLOCK:
-						b := p2p_pb.BcBlock{}
-						err = proto.Unmarshal(oneMessage.Value, &b)
+						b := new(p2p_pb.BcBlock)
+						err = proto.Unmarshal(oneMessage.Value, b)
 						checkError(err)
-						isValid, err := validation.IsValidBlock(&b)
+						isValid, err := validation.IsValidBlock(b)
 						if isValid {
 							peerIDHex := hex.EncodeToString(oneMessage.PeerID)
 							msgHandler := olMessageHandlers[peerIDHex]
 							msgHandler.Peer.Height = b.GetHeight()
 							olMessageHandlers[peerIDHex] = msgHandler
 							zap.S().Infof("Received Valid BLOCK: Set Height of %v to %v", peerIDHex, b.GetHeight())
+							gooldb.AddBlock(b)
+							zap.S().Infof("added block!")
 						} else {
 							zap.S().Infof("Received Invalid BLOCK: %v -> %v", b.GetHeight(), err)
 						}
@@ -740,6 +554,7 @@ func main() {
 	for {
 		time.Sleep(time.Second * 1)
 	}
+	return
 }
 
 func handshake_peer(conn net.Conn, id []byte, buf *[0x100000]byte) ([]byte, int, error) {

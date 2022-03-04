@@ -17,6 +17,10 @@ import (
 	"time"
 )
 
+var ChainstateBlocks = []byte("CHAINSTATE-BLOCKS")
+var ChainstateTxs = []byte("CHAINSTATE-TXS")
+var ChainstateMTxs = []byte("CHAINSTATE-MTXS")
+
 type OverlineDBConfig struct {
 	Maturity           int `json:"maturity"`           // how many blocks until maturity is reached
 	IncomingBlocksSize int `json:"incomingBlocksSize"` // how big is the map of incoming blocks
@@ -36,7 +40,7 @@ func DefaultOverlineDBConfig() OverlineDBConfig {
 }
 
 type OverlineDB struct {
-	config               OverlineDBConfig
+	Config               OverlineDBConfig
 	db                   *bolt.DB
 	mu                   sync.Mutex
 	txMu                 sync.Mutex
@@ -52,17 +56,51 @@ func (odb *OverlineDB) Open(filepath string) error {
 	var err error
 	odb.db, err = bolt.Open(filepath, 0600, nil)
 	odb.mu.Lock()
-	odb.toSerialize = make([]*p2p_pb.BcBlock, 0, 1000)
+	odb.toSerialize = make([]*p2p_pb.BcBlock, 0, 10*odb.Config.AncientChunkSize)
 	odb.incomingBlocks = make(map[string]*p2p_pb.BcBlock)
+	odb.txMu.Lock()
+	odb.txMemPool = make(map[string]*p2p_pb.Transaction)
+	odb.mtxMemPool = make(map[string]*p2p_pb.MarkedTransaction)
+	odb.txMu.Unlock()
 
 	err = odb.db.View(func(tx *bolt.Tx) error {
-		b := tx.Bucket([]byte("SYNC-INFO"))
-		if b == nil {
-			return errors.New("Unitialized blockchain file!")
+		blocks := tx.Bucket(ChainstateBlocks)
+		txs := tx.Bucket(ChainstateTxs)
+		mtxs := tx.Bucket(ChainstateMTxs)
+		if blocks == nil {
+			return errors.New("Uninitialized blockchain file!")
 		}
-		heightBytes := b.Get([]byte("LastWrittenBlockHeight"))
-		startingHeight := binary.BigEndian.Uint64(heightBytes)
-		zap.S().Infof("The LastWrittenBlockHeight is: %d", startingHeight)
+		cblocks := blocks.Cursor()
+
+		for hash, serblock := cblocks.First(); hash != nil; hash, serblock = cblocks.Next() {
+			strhash := hex.EncodeToString(hash)
+			block := new(p2p_pb.BcBlock)
+			err := proto.Unmarshal(serblock, block)
+			isValid, _ := validation.IsValidBlock(block)
+			if err == nil && isValid {
+				odb.incomingBlocks[strhash] = block
+			}
+		}
+		odb.txMu.Lock()
+		curtx := txs.Cursor()
+		for hash, sertx := curtx.First(); hash != nil; hash, sertx = curtx.Next() {
+			strhash := hex.EncodeToString(hash)
+			tx := new(p2p_pb.Transaction)
+			err := proto.Unmarshal(sertx, tx)
+			if err == nil {
+				odb.txMemPool[strhash] = tx
+			}
+		}
+		curmtx := mtxs.Cursor()
+		for hash, sermtx := curmtx.First(); hash != nil; hash, sermtx = curmtx.Next() {
+			strhash := hex.EncodeToString(hash)
+			mtx := new(p2p_pb.MarkedTransaction)
+			err := proto.Unmarshal(sermtx, mtx)
+			if err == nil {
+				odb.mtxMemPool[strhash] = mtx
+			}
+		}
+		odb.txMu.Unlock()
 
 		return nil
 	})
@@ -72,10 +110,6 @@ func (odb *OverlineDB) Open(filepath string) error {
 		odb.highestBlock = nil
 	}
 	odb.mu.Unlock()
-	odb.txMu.Lock()
-	odb.txMemPool = make(map[string]*p2p_pb.Transaction)
-	odb.mtxMemPool = make(map[string]*p2p_pb.MarkedTransaction)
-	odb.txMu.Unlock()
 	return err
 }
 
@@ -111,13 +145,17 @@ func (odb *OverlineDB) addBlockUnsafe(block *p2p_pb.BcBlock) {
 }
 
 func (odb *OverlineDB) AddBlock(block *p2p_pb.BcBlock) error {
+	zap.S().Debug("AddBlock -> entered function!")
 	isValid, err := validation.IsValidBlock(block)
 	if !isValid {
 		return err
 	}
+	zap.S().Debug("AddBlock -> Acquiring lock!")
 	odb.mu.Lock()
+	zap.S().Debug("AddBlock -> acquired lock!")
 	odb.addBlockUnsafe(block)
 	odb.mu.Unlock()
+	zap.S().Debug("AddBlock -> released lock!")
 	return nil
 }
 
@@ -145,9 +183,6 @@ func (odb *OverlineDB) AddMarkedTransaction(mtx *p2p_pb.MarkedTransaction) {
 }
 
 func (odb *OverlineDB) FlushToDisk() {
-	ChainstateBlocks := []byte("CHAINSTATE-BLOCKS")
-	ChainstateTxs := []byte("CHAINSTATE-TXS")
-	ChainstateMTxs := []byte("CHAINSTATE-MTXS")
 	odb.mu.Lock()
 	odb.txMu.Lock()
 	err := odb.db.Update(func(tx *bolt.Tx) error {
@@ -158,16 +193,16 @@ func (odb *OverlineDB) FlushToDisk() {
 		// reset on-disk chainstates
 		if chainstate_blocks != nil {
 			tx.DeleteBucket(ChainstateBlocks)
-			chainstate_blocks, _ = tx.CreateBucket(ChainstateBlocks)
 		}
+		chainstate_blocks, _ = tx.CreateBucket(ChainstateBlocks)
 		if chainstate_txs != nil {
 			tx.DeleteBucket(ChainstateTxs)
-			chainstate_txs, _ = tx.CreateBucket(ChainstateTxs)
 		}
+		chainstate_txs, _ = tx.CreateBucket(ChainstateTxs)
 		if chainstate_mtxs != nil {
 			tx.DeleteBucket(ChainstateMTxs)
-			chainstate_mtxs, _ = tx.CreateBucket(ChainstateMTxs)
 		}
+		chainstate_mtxs, _ = tx.CreateBucket(ChainstateMTxs)
 		// fill the chainstate
 		for hash, block := range odb.incomingBlocks {
 			key, _ := hex.DecodeString(hash)
@@ -206,8 +241,7 @@ func (odb *OverlineDB) Run() {
 	go func() {
 		for {
 			odb.mu.Lock()
-			if len(odb.incomingBlocks) > odb.config.IncomingBlocksSize {
-				odb.mu.Lock()
+			if len(odb.incomingBlocks) > odb.Config.IncomingBlocksSize {
 				for hash, newBlock := range odb.incomingBlocks {
 					odb.toSerialize = append(odb.toSerialize, newBlock)
 					delete(odb.incomingBlocks, hash)
@@ -224,8 +258,13 @@ func (odb *OverlineDB) Run() {
 					}
 					return odb.toSerialize[i].GetHeight() < odb.toSerialize[j].GetHeight()
 				})
+				if len(odb.toSerialize) > odb.Config.AncientChunkSize {
+					odb.serializeBlocks(odb.toSerialize[:odb.Config.AncientChunkSize])
+					odb.toSerialize = odb.toSerialize[odb.Config.AncientChunkSize:]
+				}
 				odb.mu.Unlock()
 			} else {
+				odb.mu.Unlock()
 				time.Sleep(time.Second * 2)
 			}
 		}
