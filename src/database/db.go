@@ -4,6 +4,8 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	lru "github.com/hashicorp/golang-lru"
 	"github.com/overline-mining/gool/src/common"
 	p2p_pb "github.com/overline-mining/gool/src/protos"
 	"github.com/overline-mining/gool/src/validation"
@@ -20,6 +22,9 @@ import (
 var ChainstateBlocks = []byte("CHAINSTATE-BLOCKS")
 var ChainstateTxs = []byte("CHAINSTATE-TXS")
 var ChainstateMTxs = []byte("CHAINSTATE-MTXS")
+var OverlineBlockChunks = []byte("OVERLINE-BLOCK-CHUNKS")
+var OverlineBlockChuckMap = []byte("OVERLINE-BLOCK-CHUNK-MAP")
+var SyncInfo = []byte("SYNC-INFO")
 
 type OverlineDBConfig struct {
 	Maturity           int `json:"maturity"`           // how many blocks until maturity is reached
@@ -44,17 +49,21 @@ type OverlineDB struct {
 	db                   *bolt.DB
 	mu                   sync.Mutex
 	txMu                 sync.Mutex
+	ibdMu                sync.Mutex
+	ibdMode              bool              // Initial Block Download mode
 	tipOfSerializedChain *p2p_pb.BcBlock   // the highest, main-chain serialized block
 	highestBlock         *p2p_pb.BcBlock   // the highest block with the most distance
 	toSerialize          []*p2p_pb.BcBlock // sorted ascending in block height
 	incomingBlocks       map[string]*p2p_pb.BcBlock
 	txMemPool            map[string]*p2p_pb.Transaction
 	mtxMemPool           map[string]*p2p_pb.MarkedTransaction
+	lookupCache          *lru.ARCCache
 }
 
 func (odb *OverlineDB) Open(filepath string) error {
 	var err error
 	odb.db, err = bolt.Open(filepath, 0600, nil)
+	odb.lookupCache, err = lru.NewARC(odb.Config.ActiveSet)
 	odb.mu.Lock()
 	odb.toSerialize = make([]*p2p_pb.BcBlock, 0, 10*odb.Config.AncientChunkSize)
 	odb.incomingBlocks = make(map[string]*p2p_pb.BcBlock)
@@ -70,8 +79,10 @@ func (odb *OverlineDB) Open(filepath string) error {
 		if blocks == nil {
 			return errors.New("Uninitialized blockchain file!")
 		}
+		odb.ibdMu.Lock()
+		odb.ibdMode = true
+		odb.ibdMu.Unlock()
 		cblocks := blocks.Cursor()
-
 		for hash, serblock := cblocks.First(); hash != nil; hash, serblock = cblocks.Next() {
 			strhash := hex.EncodeToString(hash)
 			block := new(p2p_pb.BcBlock)
@@ -108,7 +119,21 @@ func (odb *OverlineDB) Open(filepath string) error {
 	if err != nil {
 		odb.tipOfSerializedChain = nil
 		odb.highestBlock = nil
+	} else {
+		err = odb.db.View(func(tx *bolt.Tx) error {
+			syncInfo := tx.Bucket(SyncInfo)
+			if syncInfo != nil {
+				lastWrittenHash := syncInfo.Get([]byte("LastWrittenBlockHash"))
+				odb.tipOfSerializedChain, err = odb.getSerializedBlock(lastWrittenHash)
+				if err != nil {
+					return err
+				}
+				odb.highestBlock = nil
+			}
+			return nil
+		})
 	}
+	odb.SetInitialBlockDownload()
 	odb.mu.Unlock()
 	return err
 }
@@ -144,18 +169,33 @@ func (odb *OverlineDB) addBlockUnsafe(block *p2p_pb.BcBlock) {
 	}
 }
 
+func (odb *OverlineDB) SetInitialBlockDownload() {
+	odb.ibdMu.Lock()
+	odb.ibdMode = true
+	odb.ibdMu.Unlock()
+}
+
+func (odb *OverlineDB) UnSetInitialBlockDownload() {
+	odb.ibdMu.Lock()
+	odb.ibdMode = false
+	odb.ibdMu.Unlock()
+}
+
+func (odb *OverlineDB) IsInitialBlockDownload() bool {
+	odb.ibdMu.Lock()
+	out := odb.ibdMode
+	odb.ibdMu.Unlock()
+	return out
+}
+
 func (odb *OverlineDB) AddBlock(block *p2p_pb.BcBlock) error {
-	zap.S().Debug("AddBlock -> entered function!")
 	isValid, err := validation.IsValidBlock(block)
 	if !isValid {
 		return err
 	}
-	zap.S().Debug("AddBlock -> Acquiring lock!")
 	odb.mu.Lock()
-	zap.S().Debug("AddBlock -> acquired lock!")
 	odb.addBlockUnsafe(block)
 	odb.mu.Unlock()
-	zap.S().Debug("AddBlock -> released lock!")
 	return nil
 }
 
@@ -165,7 +205,9 @@ func (odb *OverlineDB) AddBlockRange(brange *p2p_pb.BcBlocks) error {
 		if !isValid {
 			return err
 		}
+		odb.mu.Lock()
 		odb.addBlockUnsafe(block)
+		odb.mu.Unlock()
 	}
 	return nil
 }
@@ -180,6 +222,71 @@ func (odb *OverlineDB) AddMarkedTransaction(mtx *p2p_pb.MarkedTransaction) {
 	odb.txMu.Lock()
 	odb.mtxMemPool[mtx.GetHash()] = mtx
 	odb.txMu.Unlock()
+}
+
+func (odb *OverlineDB) GetBlockByHeight(blockHeight uint64) (*p2p_pb.BcBlock, error) {
+	return nil, nil
+}
+
+func (odb *OverlineDB) GetBlock(blockHash []byte) (*p2p_pb.BcBlock, error) {
+	blockHashString := hex.EncodeToString(blockHash)
+	tryblock, ok1 := odb.lookupCache.Get(blockHashString)
+	block, ok2 := tryblock.(*p2p_pb.BcBlock)
+	var err error = nil
+	if !(ok1 && ok2) {
+		// two places to look for a block:
+		// incomingBlocks (needs lock)
+		odb.mu.Lock()
+		block, ok1 = odb.incomingBlocks[blockHashString]
+		odb.mu.Unlock()
+		if !ok1 {
+			// serialized in database (doesn't need lock)
+			block, err = odb.getSerializedBlock(blockHash)
+			if err != nil {
+				return nil, err
+			}
+		}
+		odb.lookupCache.Add(blockHashString, block)
+	}
+	return block, nil
+}
+
+func (odb *OverlineDB) getSerializedBlock(blockHash []byte) (*p2p_pb.BcBlock, error) {
+	blockHashString := hex.EncodeToString(blockHash)
+	block := new(p2p_pb.BcBlock)
+	ok := false
+
+	err := odb.db.View(func(tx *bolt.Tx) error {
+		chunks := tx.Bucket([]byte("OVERLINE-BLOCK-CHUNKS"))
+		block2chunk := tx.Bucket([]byte("OVERLINE-BLOCK-CHUNK-MAP"))
+
+		chunkHash := block2chunk.Get(blockHash)
+		chunk := chunks.Get(chunkHash)
+		decompressionBuf := make([]byte, 10*len(chunk))
+		nDecompressed, err := lz4.UncompressBlock(chunk, decompressionBuf)
+		if err != nil {
+			return err
+		}
+		blockList := p2p_pb.BcBlocks{}
+		err = proto.Unmarshal(decompressionBuf[:nDecompressed], &blockList)
+		if err != nil {
+			return err
+		}
+		for _, chunkBlock := range blockList.Blocks {
+			if chunkBlock.GetHash() == blockHashString {
+				block = chunkBlock
+				ok = true
+				break
+			}
+		}
+
+		if !ok {
+			return errors.New(fmt.Sprintf("Block %v not found in serialized block database!", blockHashString))
+		}
+
+		return nil
+	})
+	return block, err
 }
 
 func (odb *OverlineDB) FlushToDisk() {
@@ -259,8 +366,39 @@ func (odb *OverlineDB) Run() {
 					return odb.toSerialize[i].GetHeight() < odb.toSerialize[j].GetHeight()
 				})
 				if len(odb.toSerialize) > odb.Config.AncientChunkSize {
+					odb.tipOfSerializedChain = odb.toSerialize[odb.Config.AncientChunkSize-1]
+					zap.S().Debugf("Set tipOfSerializedChain to: %v %v", odb.tipOfSerializedChain.GetHeight(), common.BriefHash(odb.tipOfSerializedChain.GetHash()))
+					toSerialize := odb.toSerialize[:odb.Config.AncientChunkSize]
+					for iblk := 0; iblk < len(toSerialize)-1; iblk++ {
+						zap.S().Debugf(
+							"Ordered block pair check: %v (%v, %v) -> %v (%v, %v)",
+							toSerialize[iblk].GetHeight(),
+							common.BriefHash(toSerialize[iblk].GetHash()),
+							common.BriefHash(toSerialize[iblk].GetPreviousHash()),
+							toSerialize[iblk+1].GetHeight(),
+							common.BriefHash(toSerialize[iblk+1].GetHash()),
+							common.BriefHash(toSerialize[iblk+1].GetPreviousHash()),
+						)
+						if !validation.OrderedBlockPairIsValid(toSerialize[iblk], toSerialize[iblk+1]) {
+							common.CheckError(
+								errors.New(
+									fmt.Sprintf(
+										"%v (%v, %v) -> %v (%v, %v) Invalid pair!",
+										toSerialize[iblk].GetHeight(),
+										common.BriefHash(toSerialize[iblk].GetHash()),
+										common.BriefHash(toSerialize[iblk].GetPreviousHash()),
+										toSerialize[iblk+1].GetHeight(),
+										common.BriefHash(toSerialize[iblk+1].GetHash()),
+										common.BriefHash(toSerialize[iblk+1].GetPreviousHash()),
+									)))
+						}
+					}
 					odb.serializeBlocks(odb.toSerialize[:odb.Config.AncientChunkSize])
-					odb.toSerialize = odb.toSerialize[odb.Config.AncientChunkSize:]
+					// add unserialized blocks back to incomingBlocks
+					for _, block := range odb.toSerialize[odb.Config.AncientChunkSize:] {
+						odb.incomingBlocks[block.GetHash()] = block
+					}
+					odb.toSerialize = make([]*p2p_pb.BcBlock, 0, 10*odb.Config.AncientChunkSize)
 				}
 				odb.mu.Unlock()
 			} else {

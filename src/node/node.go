@@ -28,10 +28,12 @@ import (
 	trHttp "github.com/anacrolix/torrent/tracker/http"
 	"net"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/overline-mining/gool/src/genesis"
 	"github.com/overline-mining/gool/src/protocol/messages"
@@ -305,6 +307,15 @@ func main() {
 	checkError(err)
 	defer gooldb.Close()
 
+	// add ctrl-c catcher for closing the database
+	c := make(chan os.Signal)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-c
+		gooldb.Close()
+		os.Exit(1)
+	}()
+
 	// start the gool ingestion thread
 	gooldb.Run()
 
@@ -484,10 +495,20 @@ func main() {
 							msgHandler.Peer.Height = b.GetHeight()
 							olMessageHandlers[peerIDHex] = msgHandler
 							zap.S().Infof("Received Valid BLOCK: Set Height of %v to %v", peerIDHex, b.GetHeight())
-							gooldb.AddBlock(b)
-							zap.S().Infof("added block!")
+							if !gooldb.IsInitialBlockDownload() {
+								gooldb.AddBlock(b)
+							}
 						} else {
 							zap.S().Infof("Received Invalid BLOCK: %v -> %v", b.GetHeight(), err)
+						}
+					case messages.TX:
+						tx := new(p2p_pb.Transaction)
+						err = proto.Unmarshal(oneMessage.Value, tx)
+						checkError(err)
+						peerIDHex := hex.EncodeToString(oneMessage.PeerID)
+						zap.S().Infof("Received broadcasted TX %v from %v", tx.GetHash(), peerIDHex)
+						if !gooldb.IsInitialBlockDownload() {
+							gooldb.AddTransaction(tx)
 						}
 					default:
 						zap.S().Debugf("Throwing away: %v->%v", hex.EncodeToString(oneMessage.PeerID), oneMessage.Type)
