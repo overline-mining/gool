@@ -22,6 +22,9 @@ const _ = grpc.SupportPackageIsVersion7
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type BcClient interface {
+	GetFeaturedFeedMessages(ctx context.Context, in *GetFeedMessagesRequest, opts ...grpc.CallOption) (*FeedMessages, error)
+	GetSavedFeedMessages(ctx context.Context, in *GetFeedMessagesRequest, opts ...grpc.CallOption) (*FeedMessages, error)
+	GetEphemeralFeedMessages(ctx context.Context, in *GetFeedMessagesRequest, opts ...grpc.CallOption) (*FeedMessages, error)
 	GetRoveredBlockHash(ctx context.Context, in *GetRoveredBlockHashRequest, opts ...grpc.CallOption) (*Block, error)
 	GetRoveredBlockHeight(ctx context.Context, in *GetRoveredBlockHeightRequest, opts ...grpc.CallOption) (*Block, error)
 	GetRoveredBlocks(ctx context.Context, in *GetRoveredBlocksRequest, opts ...grpc.CallOption) (*GetRoveredBlocksResponse, error)
@@ -83,6 +86,33 @@ type bcClient struct {
 
 func NewBcClient(cc grpc.ClientConnInterface) BcClient {
 	return &bcClient{cc}
+}
+
+func (c *bcClient) GetFeaturedFeedMessages(ctx context.Context, in *GetFeedMessagesRequest, opts ...grpc.CallOption) (*FeedMessages, error) {
+	out := new(FeedMessages)
+	err := c.cc.Invoke(ctx, "/bc.exchange.Bc/GetFeaturedFeedMessages", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *bcClient) GetSavedFeedMessages(ctx context.Context, in *GetFeedMessagesRequest, opts ...grpc.CallOption) (*FeedMessages, error) {
+	out := new(FeedMessages)
+	err := c.cc.Invoke(ctx, "/bc.exchange.Bc/GetSavedFeedMessages", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *bcClient) GetEphemeralFeedMessages(ctx context.Context, in *GetFeedMessagesRequest, opts ...grpc.CallOption) (*FeedMessages, error) {
+	out := new(FeedMessages)
+	err := c.cc.Invoke(ctx, "/bc.exchange.Bc/GetEphemeralFeedMessages", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *bcClient) GetRoveredBlockHash(ctx context.Context, in *GetRoveredBlockHashRequest, opts ...grpc.CallOption) (*Block, error) {
@@ -566,6 +596,9 @@ func (c *bcClient) GetFastSyncStatus(ctx context.Context, in *Null, opts ...grpc
 // All implementations must embed UnimplementedBcServer
 // for forward compatibility
 type BcServer interface {
+	GetFeaturedFeedMessages(context.Context, *GetFeedMessagesRequest) (*FeedMessages, error)
+	GetSavedFeedMessages(context.Context, *GetFeedMessagesRequest) (*FeedMessages, error)
+	GetEphemeralFeedMessages(context.Context, *GetFeedMessagesRequest) (*FeedMessages, error)
 	GetRoveredBlockHash(context.Context, *GetRoveredBlockHashRequest) (*Block, error)
 	GetRoveredBlockHeight(context.Context, *GetRoveredBlockHeightRequest) (*Block, error)
 	GetRoveredBlocks(context.Context, *GetRoveredBlocksRequest) (*GetRoveredBlocksResponse, error)
@@ -626,6 +659,15 @@ type BcServer interface {
 type UnimplementedBcServer struct {
 }
 
+func (UnimplementedBcServer) GetFeaturedFeedMessages(context.Context, *GetFeedMessagesRequest) (*FeedMessages, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetFeaturedFeedMessages not implemented")
+}
+func (UnimplementedBcServer) GetSavedFeedMessages(context.Context, *GetFeedMessagesRequest) (*FeedMessages, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetSavedFeedMessages not implemented")
+}
+func (UnimplementedBcServer) GetEphemeralFeedMessages(context.Context, *GetFeedMessagesRequest) (*FeedMessages, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetEphemeralFeedMessages not implemented")
+}
 func (UnimplementedBcServer) GetRoveredBlockHash(context.Context, *GetRoveredBlockHashRequest) (*Block, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetRoveredBlockHash not implemented")
 }
@@ -796,6 +838,60 @@ type UnsafeBcServer interface {
 
 func RegisterBcServer(s grpc.ServiceRegistrar, srv BcServer) {
 	s.RegisterService(&Bc_ServiceDesc, srv)
+}
+
+func _Bc_GetFeaturedFeedMessages_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetFeedMessagesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BcServer).GetFeaturedFeedMessages(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/bc.exchange.Bc/GetFeaturedFeedMessages",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BcServer).GetFeaturedFeedMessages(ctx, req.(*GetFeedMessagesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Bc_GetSavedFeedMessages_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetFeedMessagesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BcServer).GetSavedFeedMessages(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/bc.exchange.Bc/GetSavedFeedMessages",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BcServer).GetSavedFeedMessages(ctx, req.(*GetFeedMessagesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Bc_GetEphemeralFeedMessages_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetFeedMessagesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BcServer).GetEphemeralFeedMessages(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/bc.exchange.Bc/GetEphemeralFeedMessages",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BcServer).GetEphemeralFeedMessages(ctx, req.(*GetFeedMessagesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _Bc_GetRoveredBlockHash_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -1759,6 +1855,18 @@ var Bc_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "bc.exchange.Bc",
 	HandlerType: (*BcServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "GetFeaturedFeedMessages",
+			Handler:    _Bc_GetFeaturedFeedMessages_Handler,
+		},
+		{
+			MethodName: "GetSavedFeedMessages",
+			Handler:    _Bc_GetSavedFeedMessages_Handler,
+		},
+		{
+			MethodName: "GetEphemeralFeedMessages",
+			Handler:    _Bc_GetEphemeralFeedMessages_Handler,
+		},
 		{
 			MethodName: "GetRoveredBlockHash",
 			Handler:    _Bc_GetRoveredBlockHash_Handler,
