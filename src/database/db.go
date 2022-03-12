@@ -129,9 +129,14 @@ func (odb *OverlineDB) Open(filepath string) error {
 					return err
 				}
 				odb.highestBlock = nil
+			} else {
+				return errors.New("Blockchain database malformed SYNC-INFO bucket not available!")
 			}
 			return nil
 		})
+		if err == nil {
+			zap.S().Infof("Recovered last serialized block: %v -> %v", common.BriefHash(odb.tipOfSerializedChain.GetHash()), odb.tipOfSerializedChain.GetHeight())
+		}
 	}
 	odb.SetInitialBlockDownload()
 	odb.mu.Unlock()
@@ -186,6 +191,12 @@ func (odb *OverlineDB) IsInitialBlockDownload() bool {
 	out := odb.ibdMode
 	odb.ibdMu.Unlock()
 	return out
+}
+
+func (odb *OverlineDB) SerializedHeight() uint64 {
+	odb.mu.Lock()
+	defer odb.mu.Unlock()
+	return odb.tipOfSerializedChain.GetHeight()
 }
 
 func (odb *OverlineDB) AddBlock(block *p2p_pb.BcBlock) error {
@@ -366,9 +377,22 @@ func (odb *OverlineDB) Run() {
 					return odb.toSerialize[i].GetHeight() < odb.toSerialize[j].GetHeight()
 				})
 				if len(odb.toSerialize) > odb.Config.AncientChunkSize {
-					odb.tipOfSerializedChain = odb.toSerialize[odb.Config.AncientChunkSize-1]
-					zap.S().Debugf("Set tipOfSerializedChain to: %v %v", odb.tipOfSerializedChain.GetHeight(), common.BriefHash(odb.tipOfSerializedChain.GetHash()))
 					toSerialize := odb.toSerialize[:odb.Config.AncientChunkSize]
+					if odb.tipOfSerializedChain != nil {
+						if !validation.OrderedBlockPairIsValid(odb.tipOfSerializedChain, toSerialize[0]) {
+							common.CheckError(
+								errors.New(
+									fmt.Sprintf(
+										"%v (%v, %v) -> %v (%v, %v) Invalid pair!",
+										odb.tipOfSerializedChain.GetHeight(),
+										common.BriefHash(odb.tipOfSerializedChain.GetHash()),
+										common.BriefHash(odb.tipOfSerializedChain.GetPreviousHash()),
+										toSerialize[0].GetHeight(),
+										common.BriefHash(toSerialize[0].GetHash()),
+										common.BriefHash(toSerialize[0].GetPreviousHash()),
+									)))
+						}
+					}
 					for iblk := 0; iblk < len(toSerialize)-1; iblk++ {
 						zap.S().Debugf(
 							"Ordered block pair check: %v (%v, %v) -> %v (%v, %v)",
@@ -393,7 +417,9 @@ func (odb *OverlineDB) Run() {
 									)))
 						}
 					}
-					odb.serializeBlocks(odb.toSerialize[:odb.Config.AncientChunkSize])
+					odb.serializeBlocks(toSerialize)
+					odb.tipOfSerializedChain = odb.toSerialize[odb.Config.AncientChunkSize-1]
+					zap.S().Debugf("Set tipOfSerializedChain to: %v %v", odb.tipOfSerializedChain.GetHeight(), common.BriefHash(odb.tipOfSerializedChain.GetHash()))
 					// add unserialized blocks back to incomingBlocks
 					for _, block := range odb.toSerialize[odb.Config.AncientChunkSize:] {
 						odb.incomingBlocks[block.GetHash()] = block

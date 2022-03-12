@@ -302,6 +302,8 @@ func main() {
 			os.Exit(1)
 		}
 		err = gooldb.AddBlock(gblock)
+	} else {
+		startingHeight = gooldb.SerializedHeight()
 	}
 
 	checkError(err)
