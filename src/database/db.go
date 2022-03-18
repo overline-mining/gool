@@ -138,6 +138,20 @@ func (odb *OverlineDB) Open(filepath string) error {
 			zap.S().Infof("Recovered last serialized block: %v -> %v", common.BriefHash(odb.tipOfSerializedChain.GetHash()), odb.tipOfSerializedChain.GetHeight())
 		}
 	}
+
+	if odb.tipOfSerializedChain != nil {
+		to_kill := make([]string, 0)
+		for _, block := range odb.incomingBlocks {
+			if block.GetHeight() <= odb.tipOfSerializedChain.GetHeight() {
+				to_kill = append(to_kill, block.GetHash())
+			}
+		}
+		for _, hash := range to_kill {
+			delete(odb.incomingBlocks, hash)
+			zap.S().Debugf("Killing: %v", common.BriefHash(hash))
+		}
+	}
+
 	odb.SetInitialBlockDownload()
 	odb.mu.Unlock()
 	return err
@@ -418,7 +432,7 @@ func (odb *OverlineDB) Run() {
 						}
 					}
 					odb.serializeBlocks(toSerialize)
-					odb.tipOfSerializedChain = odb.toSerialize[odb.Config.AncientChunkSize-1]
+					odb.tipOfSerializedChain = toSerialize[odb.Config.AncientChunkSize-1]
 					zap.S().Debugf("Set tipOfSerializedChain to: %v %v", odb.tipOfSerializedChain.GetHeight(), common.BriefHash(odb.tipOfSerializedChain.GetHash()))
 					// add unserialized blocks back to incomingBlocks
 					for _, block := range odb.toSerialize[odb.Config.AncientChunkSize:] {

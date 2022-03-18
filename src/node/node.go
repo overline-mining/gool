@@ -114,6 +114,11 @@ func (mh *OverlineMessageHandler) Initialize(conn net.Conn) {
 	mh.Peer = OverlinePeer{Conn: conn, ID: peer_id, Height: 0}
 }
 
+type IBDWorkList struct {
+	Mu            sync.Mutex
+	AllowedBlocks map[uint64]bool
+}
+
 func (mh *OverlineMessageHandler) Run() {
 	messageCounter := uint64(0)
 	for {
@@ -321,6 +326,8 @@ func main() {
 	// start the gool ingestion thread
 	gooldb.Run()
 
+	ibdWorkList := IBDWorkList{AllowedBlocks: make(map[uint64]bool)}
+
 	id_bytes := make([]byte, 32)
 	rand.Read(id_bytes)
 	id := metainfo.HashBytes(id_bytes)
@@ -481,6 +488,18 @@ func main() {
 					case messages.DATA:
 						blocks := p2p_pb.BcBlocks{}
 						err = proto.Unmarshal(oneMessage.Value, &blocks)
+						if gooldb.IsInitialBlockDownload() {
+							goodBlocks := p2p_pb.BcBlocks{}
+							ibdWorkList.Mu.Lock()
+							for _, block := range blocks.Blocks {
+								if _, ok := ibdWorkList.AllowedBlocks[block.GetHeight()]; ok {
+									goodBlocks.Blocks = append(goodBlocks.Blocks, block)
+									delete(ibdWorkList.AllowedBlocks, block.GetHeight())
+								}
+							}
+							ibdWorkList.Mu.Unlock()
+							blocks = goodBlocks
+						}
 						if err == nil {
 							gooldb.AddBlockRange(&blocks)
 						} else {
@@ -515,6 +534,7 @@ func main() {
 					default:
 						zap.S().Debugf("Throwing away: %v->%v", hex.EncodeToString(oneMessage.PeerID), oneMessage.Type)
 					}
+
 				}
 			}
 			olMessageMu.Unlock()
@@ -540,6 +560,11 @@ func main() {
 				if high > messageHandler.Peer.Height {
 					high = messageHandler.Peer.Height
 				}
+				ibdWorkList.Mu.Lock()
+				for i := low; i < high; i++ {
+					ibdWorkList.AllowedBlocks[i] = true
+				}
+				ibdWorkList.Mu.Unlock()
 				reqstr := messages.GET_DATA + messages.SEPARATOR + fmt.Sprintf("%d%s%d", low, messages.SEPARATOR, high)
 				reqLen := len(reqstr)
 				request := make([]byte, reqLen+4)
