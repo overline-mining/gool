@@ -116,7 +116,7 @@ func (mh *OverlineMessageHandler) Initialize(conn net.Conn) {
 
 type IBDWorkList struct {
 	Mu            sync.Mutex
-	AllowedBlocks map[uint64]bool
+	AllowedBlocks map[uint64]uint64
 }
 
 func (mh *OverlineMessageHandler) Run() {
@@ -326,7 +326,7 @@ func main() {
 	// start the gool ingestion thread
 	gooldb.Run()
 
-	ibdWorkList := IBDWorkList{AllowedBlocks: make(map[uint64]bool)}
+	ibdWorkList := IBDWorkList{AllowedBlocks: make(map[uint64]uint64)}
 
 	id_bytes := make([]byte, 32)
 	rand.Read(id_bytes)
@@ -562,7 +562,7 @@ func main() {
 				}
 				ibdWorkList.Mu.Lock()
 				for i := low; i < high; i++ {
-					ibdWorkList.AllowedBlocks[i] = true
+					ibdWorkList.AllowedBlocks[i] = low
 				}
 				ibdWorkList.Mu.Unlock()
 				reqstr := messages.GET_DATA + messages.SEPARATOR + fmt.Sprintf("%d%s%d", low, messages.SEPARATOR, high)
@@ -581,10 +581,24 @@ func main() {
 					os.Exit(1)
 				}
 				checkError(err)
+				olMessageMu.Unlock()
 
 				iStride += 1
+				if iStride%100 == 0 { // if we've submitted a request for 1000 blocks - wait until we have received them all
+					for {
+						ibdWorkList.Mu.Lock()
+						nBlocksRemaining := len(ibdWorkList.AllowedBlocks)
+						ibdWorkList.Mu.Unlock()
+						zap.S().Debugf("waiting for %v blocks to arrive...", nBlocksRemaining)
+						if nBlocksRemaining == 0 {
+							break
+						} else {
+							time.Sleep(time.Millisecond * 500)
+						}
+					}
+				}
+
 				topRange = uint64(startingHeight + (iStride+1)*blockStride + 1)
-				olMessageMu.Unlock()
 			}
 			olHandlerMapMu.Unlock()
 			time.Sleep(time.Millisecond * 250)
