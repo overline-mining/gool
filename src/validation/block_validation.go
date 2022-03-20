@@ -313,7 +313,7 @@ func markedTxHash(mtx *p2p_pb.MarkedTransaction) string {
 		mtx.GetAddrTo(),
 		strings.Join(asJSString, ","),
 	)
-	//zap.S().Debugf("markedTxHash -> toHash %s", toHash)
+	//zap.S().Debugf("markedTxHash -> toHash %s", mtx.GetHash())
 	return olhash.Blake2bl(toHash)
 }
 
@@ -329,10 +329,10 @@ func blockHeaderHash(header *p2p_pb.BlockchainHeader, height uint64) string {
 	toHash := header.GetHash() + header.GetMerkleRoot()
 	for _, mtx := range header.GetMarkedTxs() {
 		mtxHash := markedTxHash(mtx)
-		zap.S().Debugf("hashedMtx -> %v", mtxHash)
+		//zap.S().Debugf("hashedMtx -> %v", mtxHash)
 		toHash += mtxHash
 	}
-	//zap.S().Debugf("blockHeaders -> toHash %s", toHash)
+	//zap.S().Debugf("blockHeaders -> toHash %v %v %s", header.GetHeight(), header.GetHash(), toHash)
 
 	outHash := olhash.Blake2bl(toHash)
 	// these serialization differences seem to be non-deterministic in behavior
@@ -402,7 +402,7 @@ func isSkippableBlock(block *p2p_pb.BcBlock) bool {
 		return true
 	}
 
-	if height <= 1074546 && height >= 1074499 {
+	if height <= 1074546 && height >= 1074499 || (height == 1074497 || height == 1074547) { // FIXME: 1074547, 1074497 has the mtx serialization bug
 		zap.S().Debugf("Block validation skipping block 1074499 < %v <= 1074546", height)
 		return true
 	}
