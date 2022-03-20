@@ -42,7 +42,7 @@ import (
 	db "github.com/overline-mining/gool/src/database"
 	"github.com/overline-mining/gool/src/validation"
 	lz4 "github.com/pierrec/lz4/v4"
-	//progressbar "github.com/schollz/progressbar/v3"
+	probar "github.com/schollz/progressbar/v3"
 	bolt "go.etcd.io/bbolt"
 	"google.golang.org/protobuf/proto"
 )
@@ -106,11 +106,11 @@ func (mh *OverlineMessageHandler) Initialize(conn net.Conn) {
 	peer_id, nbuf, err := handshake_peer(conn, mh.ID, &mh.buf)
 	mh.buflen = nbuf
 	if err != nil {
-		zap.S().Infof("Failed to connect to %v: %v", hex.EncodeToString(peer_id), err)
+		zap.S().Debugf("Failed to connect to %v: %v", hex.EncodeToString(peer_id), err)
 		conn.Close()
 		return
 	}
-	zap.S().Infof("Completed handshake: %v -> %v", hex.EncodeToString(mh.ID), hex.EncodeToString(peer_id))
+	zap.S().Debugf("Completed handshake: %v -> %v", hex.EncodeToString(mh.ID), hex.EncodeToString(peer_id))
 	mh.Peer = OverlinePeer{Conn: conn, ID: peer_id, Height: 0}
 }
 
@@ -445,17 +445,17 @@ func main() {
 
 			peerString := peer.IP.String() + fmt.Sprintf(":%d", peer.Port+1)
 
-			zap.S().Infof("Working on peer: %v", peerString)
+			zap.S().Debugf("Working on peer: %v", peerString)
 
 			tcpAddr, err := net.ResolveTCPAddr("tcp4", peerString)
 			if err != nil {
-				zap.S().Error(err)
+				zap.S().Debug(err)
 				return
 			}
 
 			conn, err := dialer.Dial("tcp4", tcpAddr.String())
 			if err != nil {
-				zap.S().Error(err)
+				zap.S().Debug(err)
 				return
 			}
 
@@ -475,15 +475,18 @@ func main() {
 	zap.S().Infof("Successful handshakes with %d nodes!", len(olMessageHandlers))
 	olHandlerMapMu.Unlock()
 
+	ibdBar := probar.Default(int64(startingHeight+1), "initial block download ->")
+	ibdBar.Add64(int64(startingHeight))
+
 	go func() {
 		for {
 			olMessageMu.Lock()
 			if len(olMessages) > 0 {
-				zap.S().Infof("There are %v messages in the queue!", len(olMessages))
+				zap.S().Debugf("There are %v messages in the queue!", len(olMessages))
 				for len(olMessages) > 0 {
 					oneMessage := (olMessages)[0]
 					olMessages = (olMessages)[1:]
-					zap.S().Infof("Popped message %v of type %v from %v", oneMessage.ID, oneMessage.Type, hex.EncodeToString(oneMessage.PeerID))
+					zap.S().Debugf("Popped message %v of type %v from %v", oneMessage.ID, oneMessage.Type, hex.EncodeToString(oneMessage.PeerID))
 					switch oneMessage.Type {
 					case messages.DATA:
 						blocks := p2p_pb.BcBlocks{}
@@ -499,6 +502,7 @@ func main() {
 							}
 							ibdWorkList.Mu.Unlock()
 							blocks = goodBlocks
+							ibdBar.Add(len(blocks.Blocks))
 						}
 						if err == nil {
 							gooldb.AddBlockRange(&blocks)
@@ -515,19 +519,24 @@ func main() {
 							msgHandler := olMessageHandlers[peerIDHex]
 							msgHandler.Peer.Height = b.GetHeight()
 							olMessageHandlers[peerIDHex] = msgHandler
-							zap.S().Infof("Received Valid BLOCK: Set Height of %v to %v", peerIDHex, b.GetHeight())
+							zap.S().Debugf("Received Valid BLOCK: Set Height of %v to %v", peerIDHex, b.GetHeight())
 							if !gooldb.IsInitialBlockDownload() {
 								gooldb.AddBlock(b)
+							} else {
+								height_i64 := int64(b.GetHeight())
+								if height_i64 > ibdBar.GetMax64() {
+									ibdBar.ChangeMax64(height_i64)
+								}
 							}
 						} else {
-							zap.S().Infof("Received Invalid BLOCK: %v -> %v", b.GetHeight(), err)
+							zap.S().Warnf("Received Invalid BLOCK: %v -> %v", b.GetHeight(), err)
 						}
 					case messages.TX:
 						tx := new(p2p_pb.Transaction)
 						err = proto.Unmarshal(oneMessage.Value, tx)
 						checkError(err)
 						peerIDHex := hex.EncodeToString(oneMessage.PeerID)
-						zap.S().Infof("Received broadcasted TX %v from %v", tx.GetHash(), peerIDHex)
+						zap.S().Debugf("Received broadcasted TX %v from %v", tx.GetHash(), peerIDHex)
 						if !gooldb.IsInitialBlockDownload() {
 							gooldb.AddTransaction(tx)
 						}
@@ -571,7 +580,7 @@ func main() {
 				binary.BigEndian.PutUint32(request[0:], uint32(reqLen))
 				copy(request[4:], []byte(reqstr))
 
-				zap.S().Infof("Sending request: %v -> %v", peer, reqstr)
+				zap.S().Debugf("Sending request: %v -> %v", peer, reqstr)
 
 				// write the request to the connection
 				n, err := messageHandler.Peer.Conn.Write(request)
@@ -585,14 +594,15 @@ func main() {
 
 				iStride += 1
 				if iStride%100 == 0 { // if we've submitted a request for 1000 blocks - wait until we have received them all
+					zap.S().Debugf("Submitted block requests for range [%v,%v]", (iStride-100)*blockStride, iStride*blockStride)
 					for {
 						ibdWorkList.Mu.Lock()
 						nBlocksRemaining := len(ibdWorkList.AllowedBlocks)
 						ibdWorkList.Mu.Unlock()
-						zap.S().Debugf("waiting for %v blocks to arrive...", nBlocksRemaining)
 						if nBlocksRemaining == 0 {
 							break
 						} else {
+							zap.S().Debugf("waiting for %v blocks to arrive...", nBlocksRemaining)
 							time.Sleep(time.Millisecond * 500)
 						}
 					}
