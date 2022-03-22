@@ -30,54 +30,54 @@ func IsValidBlock(block *p2p_pb.BcBlock) (bool, error) {
 
 	if !TheBlockChainFingerprintMatchGenesisBlock(block) {
 		errStr := fmt.Sprintf("%v failed: TheBlockChainFingerprintMatchGenesisBlock", common.BriefHash(block.GetHash()))
-		zap.S().Errorf(errStr)
+		zap.L().Error(errStr)
 		return false, errors.New(errStr)
 	}
 
 	if !NumberOfBlockchainsNeededMatchesChildBlock(block) {
 		errStr := fmt.Sprintf("%v failed: NumberOfBlockchainsNeededMatchesChildBlock", common.BriefHash(block.GetHash()))
-		zap.S().Errorf(errStr)
+		zap.L().Error(errStr)
 		return false, errors.New(errStr)
 	}
 	if !IfMoreThanOneHeaderPerBlockchainAreTheyOrdered(block) {
 		errStr := fmt.Sprintf("%v failed: IfMoreThanOneHeaderPerBlockchainAreTheyOrdered", common.BriefHash(block.GetHash()))
-		zap.S().Errorf(errStr)
+		zap.L().Error(errStr)
 		return false, errors.New(errStr)
 	}
 	if !IsChainRootCorrectlyCalculated(block) {
 		errStr := fmt.Sprintf("%v failed: IsChainRootCorrectlyCalculated for %d, %s", common.BriefHash(block.GetHash()), block.GetHeight(), block.GetHash())
-		zap.S().Errorf(errStr)
+		zap.L().Error(errStr)
 		return false, errors.New(errStr)
 	}
 	if !IsFieldLengthBounded(block) {
 		errStr := fmt.Sprintf("%v failed: IsFieldLengthBounded at height %v", common.BriefHash(block.GetHash()), block.GetHeight())
-		zap.S().Errorf(errStr)
+		zap.L().Error(errStr)
 		return false, errors.New(errStr)
 	}
 
 	if block.GetHeight() > 665616 {
 		if !IsMerkleRootCorrectlyCalculated(block) {
 			errStr := fmt.Sprintf("%v failed: IsMerkleRootCorrectlyCalculated at height %v", common.BriefHash(block.GetHash()), block.GetHeight())
-			zap.S().Errorf(errStr)
+			zap.L().Error(errStr)
 			return false, errors.New(errStr)
 		}
 	}
 
 	if !IsDistanceAboveDifficulty(block) {
 		errStr := fmt.Sprintf("%v failed: IsDistanceAboveDifficulty at height %v", common.BriefHash(block.GetHash()), block.GetHeight())
-		zap.S().Errorf(errStr)
+		zap.L().Error(errStr)
 		return false, errors.New(errStr)
 	}
 
 	if !IsDistanceCorrectlyCalculated(block) {
 		errStr := fmt.Sprintf("%v failed: IsDistanceCorrectlyCalculated at height %v", common.BriefHash(block.GetHash()), block.GetHeight())
-		zap.S().Errorf(errStr)
+		zap.L().Error(errStr)
 		return false, errors.New(errStr)
 	}
 
 	if !IsValidBlockTime(block) {
 		errStr := fmt.Sprintf("%v failed: IsValidBlockTime at height %v", common.BriefHash(block.GetHash()), block.GetHeight())
-		zap.S().Errorf(errStr)
+		zap.L().Error(errStr)
 		return false, errors.New(errStr)
 	}
 
@@ -236,8 +236,8 @@ func IsDistanceCorrectlyCalculated(block *p2p_pb.BcBlock) bool {
 
 func IsValidBlockTime(block *p2p_pb.BcBlock) bool {
 	const (
-		timeWindowVal = uint64(2855000)
-		timeValHeight = uint64(5900000)
+		timeWindowVal = uint64(4 * 24 * 60 * 60 * 1000)
+		timeValHeight = uint64(6300000)
 	)
 
 	if block.GetHeight() < timeValHeight {
