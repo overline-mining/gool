@@ -128,7 +128,7 @@ func wavContiguityProblems(low, high *p2p_pb.BcBlock) bool {
 }
 
 func OrderedBlockPairIsValid(low, high *p2p_pb.BcBlock) bool {
-	const nitPickedValidationHeight = uint64(6830000)
+	const nitPickedValidationHeight = uint64(6850000)
 	if (high.GetHeight()-1 != low.GetHeight()) || (high.GetPreviousHash() != low.GetHash()) {
 		return false
 	}
