@@ -29,8 +29,10 @@ jobs:
           BUILD=$(git rev-parse --short HEAD)
           VERSION=${TAG}-g${BUILD}
 
-          docker buildx build --platform linux/amd64,linux/arm/v7,linux/arm64 --tag ${{ secrets.DOCKERHUB_ACCOUNT }}/gool:${VERSION} -f docker/Dockerfile.gool . --push
-          docker buildx build --platform linux/amd64,linux/arm/v7,linux/arm64 --tag ${{ secrets.DOCKERHUB_ACCOUNT }}/gool:latest -f docker/Dockerfile.gool . --push
+          PLATFORMS=linux/amd64,linux/arm/v7,linux/arm64,linux/ppc64le,linux/s390x,linux/386,linux/arm/v5,linux/mips64le,linux/riscv64
+
+          docker buildx build --platform ${PLATFORMS} --tag ${{ secrets.DOCKERHUB_ACCOUNT }}/gool:${VERSION} -f docker/Dockerfile.gool . --push
+          docker buildx build --platform ${PLATFORMS} --tag ${{ secrets.DOCKERHUB_ACCOUNT }}/gool:latest -f docker/Dockerfile.gool . --push
 
   geth:
     runs-on: ubuntu-latest
