@@ -28,7 +28,7 @@ jobs:
   gool:
     strategy:
       matrix:
-        platform: [linux/amd64, linux/arm/v7, linux/arm64]
+        platform: [linux/amd64, linux/arm/v7, linux/arm64, linux/ppc64le, linux/s390x, linux/386, linux/arm/v5, linux/mips64le, linux/riscv64]
     needs: test
     runs-on: ubuntu-latest
     steps:
@@ -45,7 +45,7 @@ jobs:
       -
         name: Build all targets
         run: |
-          docker buildx build --platform ${{ matrix.platform }} --tag ${{ secrets.DOCKERHUB_ACCOUNT }}/gool:pr-test -f docker/Dockerfile.gool .
+          docker buildx build --progress plain --platform ${{ matrix.platform }} --tag ${{ secrets.DOCKERHUB_ACCOUNT }}/gool:pr-test -f docker/Dockerfile.gool .
           
   geth:
     needs: test
