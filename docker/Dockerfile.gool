@@ -8,6 +8,9 @@ COPY ./build /go/gool/build
 COPY ./src /go/gool/src
 COPY ./data /go/gool/data
 
+RUN echo GOOS=$(echo $TARGETPLATFORM | awk '{split($0,a,"/"); print a[1]}') \
+     && echo GOARCH=$(echo $TARGETPLATFORM | awk '{split($0,a,"/"); print a[2]}') \
+     && echo GOARM=$(echo $TARGETPLATFORM | awk '{split($0,a,"/"); print substr(a[3],2,2)}')
 
 RUN cd gool \
      && GOOS=$(echo $TARGETPLATFORM | awk '{split($0,a,"/"); print a[1]}') \
@@ -16,7 +19,7 @@ RUN cd gool \
 	make \
      && gunzip /go/gool/data/genesis/at_genesis_balances.csv.gz
 
-FROM debian:bullseye-slim
+FROM debian:unstable-slim
 
 RUN groupadd -r -g 1099 gool \
      && useradd --no-log-init -r -u 1099 -g gool gool \

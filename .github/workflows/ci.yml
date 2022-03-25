@@ -45,10 +45,7 @@ jobs:
       -
         name: Build all targets
         run: |
-          if [ ${{ matrix.platform }} == "linux/riscv64" ]; then
-            sed -i 's/bullseye-slim/unstable-slim/' docker/Dockerfile.gool
-          fi
-          docker buildx build --platform ${{ matrix.platform }} --tag ${{ secrets.DOCKERHUB_ACCOUNT }}/gool:pr-test -f docker/Dockerfile.gool .
+          docker buildx build --progress plain --platform ${{ matrix.platform }} --tag ${{ secrets.DOCKERHUB_ACCOUNT }}/gool:pr-test -f docker/Dockerfile.gool .
           
   geth:
     needs: test

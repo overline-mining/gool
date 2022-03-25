@@ -11,7 +11,7 @@ COPY ./data /go/gool/data
 RUN cd gool && make \
      && gunzip /go/gool/data/genesis/at_genesis_balances.csv.gz
 
-FROM debian:bullseye-slim
+FROM debian:unstable-slim
 
 RUN groupadd -r -g 1099 gool \
      && useradd --no-log-init -r -u 1099 -g gool gool \
