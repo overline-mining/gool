@@ -7,6 +7,7 @@ require (
 	github.com/anacrolix/dht/v2 v2.14.1-0.20211220010335-4062f7927abf
 	github.com/anacrolix/log v0.10.0
 	github.com/anacrolix/torrent v1.40.0
+	github.com/autom8ter/dagger v1.0.1 // indirect
 	github.com/br0xen/boltbrowser v0.0.0-20210531150353-7f10a81cece0 // indirect
 	github.com/golang/protobuf v1.5.2
 	github.com/hashicorp/golang-lru v0.5.4 // indirect

@@ -128,6 +128,14 @@ func wavContiguityProblems(low, high *p2p_pb.BcBlock) bool {
 }
 
 func OrderedBlockPairIsValid(low, high *p2p_pb.BcBlock) bool {
+	return orderedBlockPairIsValid(low, high, false)
+}
+
+func OrderedBlockPairIsValidStrict(low, high *p2p_pb.BcBlock) bool {
+	return orderedBlockPairIsValid(low, high, true)
+}
+
+func orderedBlockPairIsValid(low, high *p2p_pb.BcBlock, isStrict bool) bool {
 	const nitPickedValidationHeight = uint64(6850000)
 	if (high.GetHeight()-1 != low.GetHeight()) || (high.GetPreviousHash() != low.GetHash()) {
 		return false
@@ -135,41 +143,42 @@ func OrderedBlockPairIsValid(low, high *p2p_pb.BcBlock) bool {
 	if low.GetHeight() != 1 { // do not validate headers if comparing to genesis block
 		if !globalContiguityProblems(low, high) {
 			if !btcContiguityProblems(low, high) && !HeaderRangeIsContiguous(low.GetBlockchainHeaders().GetBtc(), high.GetBlockchainHeaders().GetBtc()) {
-				if low.GetHeight() >= nitPickedValidationHeight {
+				if low.GetHeight() >= nitPickedValidationHeight && !isStrict {
 					zap.S().Warnf("Problem in BTC contiguity spanning blocks %v %v -> %v %v", low.GetHeight(), common.BriefHash(low.GetHash()), high.GetHeight(), common.BriefHash(high.GetHash()))
 				} else {
 					return false
 				}
 			}
 			if !ethContiguityProblems(low, high) && !HeaderRangeIsContiguous(low.GetBlockchainHeaders().GetEth(), high.GetBlockchainHeaders().GetEth()) {
-				if low.GetHeight() >= nitPickedValidationHeight {
+				if low.GetHeight() >= nitPickedValidationHeight && !isStrict {
 					zap.S().Warnf("Problem in ETH contiguity spanning blocks %v %v -> %v %v", low.GetHeight(), common.BriefHash(low.GetHash()), high.GetHeight(), common.BriefHash(high.GetHash()))
 				} else {
 					return false
 				}
 			}
 			if !lskContiguityProblems(low, high) && !HeaderRangeIsContiguous(low.GetBlockchainHeaders().GetLsk(), high.GetBlockchainHeaders().GetLsk()) {
-				if low.GetHeight() >= nitPickedValidationHeight {
+				if low.GetHeight() >= nitPickedValidationHeight && !isStrict {
 					zap.S().Warnf("Problem in LSK contiguity spanning blocks %v %v -> %v %v", low.GetHeight(), common.BriefHash(low.GetHash()), high.GetHeight(), common.BriefHash(high.GetHash()))
 				} else {
 					return false
 				}
 			}
 			if !neoContiguityProblems(low, high) && !HeaderRangeIsContiguous(low.GetBlockchainHeaders().GetNeo(), high.GetBlockchainHeaders().GetNeo()) {
-				if low.GetHeight() >= nitPickedValidationHeight {
+				if low.GetHeight() >= nitPickedValidationHeight && !isStrict {
 					zap.S().Warnf("Problem in NEO contiguity spanning blocks %v %v -> %v %v", low.GetHeight(), common.BriefHash(low.GetHash()), high.GetHeight(), common.BriefHash(high.GetHash()))
 				} else {
 					return false
 				}
 			}
 			if !wavContiguityProblems(low, high) && !HeaderRangeIsContiguous(low.GetBlockchainHeaders().GetWav(), high.GetBlockchainHeaders().GetWav()) {
-				if low.GetHeight() >= nitPickedValidationHeight {
+				if low.GetHeight() >= nitPickedValidationHeight && !isStrict {
 					zap.S().Warnf("Problem in WAV contiguity spanning blocks %v %v -> %v %v", low.GetHeight(), common.BriefHash(low.GetHash()), high.GetHeight(), common.BriefHash(high.GetHash()))
 				} else {
 					return false
 				}
 			}
 		}
+
 	}
 	return true
 }
