@@ -8,6 +8,8 @@ COPY ./build /go/gool/build
 COPY ./src /go/gool/src
 COPY ./data /go/gool/data
 
+ARG TARGETPLATFORM
+
 RUN echo GOOS=$(echo $TARGETPLATFORM | awk '{split($0,a,"/"); print a[1]}') \
      && echo GOARCH=$(echo $TARGETPLATFORM | awk '{split($0,a,"/"); print a[2]}') \
      && echo GOARM=$(echo $TARGETPLATFORM | awk '{split($0,a,"/"); print substr(a[3],2,2)}')
