@@ -21,7 +21,7 @@ case $(lscpu | grep Architecture | awk '{print $2}') in
   ;;
    
   ppc64le*)
-    export BUILD_ARCH=ppc64le-linux-gnu
+    export BUILD_ARCH=powerpc64le-linux-gnu
   ;;
 
   *)
