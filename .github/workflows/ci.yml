@@ -88,6 +88,9 @@ jobs:
           docker buildx build --platform $PLATFORMS --tag ${{ secrets.DOCKERHUB_ACCOUNT }}/bitcoin-core:pr-test -f docker/Dockerfile.bitcoin-core .
 
   waves:
+    strategy:
+      matrix:
+        platform: [linux/amd64, linux/arm/v7, linux/arm64, linux/ppc64le, linux/s390x, linux/386, linux/arm/v5, linux/mips64le, linux/riscv64]
     needs: test
     runs-on: ubuntu-latest
     steps:
@@ -104,8 +107,7 @@ jobs:
       -
         name: Build all targets
         run: |
-          PLATFORMS=linux/amd64,linux/arm/v7,linux/arm64,linux/ppc64le,linux/s390x,linux/386,linux/arm/v5,linux/mips64le,linux/riscv64
-          docker/build-waves.sh $PLATFORMS ${{ secrets.DOCKERHUB_ACCOUNT }} pr-test
+          docker/build-waves.sh ${{ matrix.platform }} ${{ secrets.DOCKERHUB_ACCOUNT }} pr-test
 
   neo:
     needs: test
