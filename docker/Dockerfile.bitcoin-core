@@ -1,4 +1,4 @@
-FROM debian:bullseye-slim as builder
+FROM debian:unstable-slim as builder
 
 ARG BTCD_VERSION=22.0
 
@@ -31,7 +31,7 @@ RUN wget https://bitcoincore.org/bin/bitcoin-core-${BTCD_VERSION}/bitcoin-${BTCD
      && rm -rf bitcoin-${BTCD_VERSION}-$(./btc-arch.sh).tar.gz \
      && mv bitcoin-${BTCD_VERSION} bitcoin
 
-FROM debian:bullseye-slim
+FROM debian:unstable-slim
 
 RUN groupadd -r -g 1102 bitcoind \
      && useradd --no-log-init -r -u 1102 -g bitcoind bitcoind \

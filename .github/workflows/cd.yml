@@ -57,8 +57,8 @@ jobs:
           BUILD=$(git rev-parse --short HEAD)
           VERSION=${TAG}-g${BUILD}
 
-          docker buildx build --platform linux/amd64,linux/arm/v7,linux/arm64 --tag ${{ secrets.DOCKERHUB_ACCOUNT }}/geth:${VERSION} -f docker/Dockerfile.geth . --push
-          docker buildx build --platform linux/amd64,linux/arm/v7,linux/arm64 --tag ${{ secrets.DOCKERHUB_ACCOUNT }}/geth:latest -f docker/Dockerfile.geth . --push
+          docker buildx build --platform linux/amd64,linux/arm/v7,linux/arm64,linux/386 --tag ${{ secrets.DOCKERHUB_ACCOUNT }}/geth:${VERSION} -f docker/Dockerfile.geth . --push
+          docker buildx build --platform linux/amd64,linux/arm/v7,linux/arm64,linux/386 --tag ${{ secrets.DOCKERHUB_ACCOUNT }}/geth:latest -f docker/Dockerfile.geth . --push
 
   bitcoind:
     runs-on: ubuntu-latest
@@ -83,8 +83,10 @@ jobs:
           BUILD=$(git rev-parse --short HEAD)
           VERSION=${TAG}-g${BUILD}
 
-          docker buildx build --platform linux/amd64,linux/arm/v7,linux/arm64 --tag ${{ secrets.DOCKERHUB_ACCOUNT }}/bitcoin-core:${VERSION} -f docker/Dockerfile.bitcoin-core . --push
-          docker buildx build --platform linux/amd64,linux/arm/v7,linux/arm64 --tag ${{ secrets.DOCKERHUB_ACCOUNT }}/bitcoin-core:latest -f docker/Dockerfile.bitcoin-core . --push
+          PLATFORMS=linux/amd64,linux/arm/v7,linux/arm64,linux/ppc64le,linux/riscv64
+
+          docker buildx build --platform $PLATFORMS --tag ${{ secrets.DOCKERHUB_ACCOUNT }}/bitcoin-core:${VERSION} -f docker/Dockerfile.bitcoin-core . --push
+          docker buildx build --platform $PLATFORMS --tag ${{ secrets.DOCKERHUB_ACCOUNT }}/bitcoin-core:latest -f docker/Dockerfile.bitcoin-core . --push
 
   waves:
     runs-on: ubuntu-latest
@@ -109,8 +111,10 @@ jobs:
           BUILD=$(git rev-parse --short HEAD)
           VERSION=${TAG}-g${BUILD}
 
-          docker/build-waves.sh linux/amd64,linux/arm/v7,linux/arm64 ${{ secrets.DOCKERHUB_ACCOUNT }} ${VERSION} --push
-          docker/build-waves.sh linux/amd64,linux/arm/v7,linux/arm64 ${{ secrets.DOCKERHUB_ACCOUNT }} latest --push
+          PLATFORMS=linux/amd64,linux/arm/v7,linux/arm64,linux/ppc64le,linux/s390x,linux/386,linux/arm/v5,linux/mips64le,linux/riscv64
+
+          docker/build-waves.sh $PLATFORMS ${{ secrets.DOCKERHUB_ACCOUNT }} ${VERSION} --push
+          docker/build-waves.sh $PLATFORMS ${{ secrets.DOCKERHUB_ACCOUNT }} latest --push
 
   neo:
     runs-on: ubuntu-latest
