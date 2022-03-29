@@ -12,6 +12,7 @@ pushd $(pwd)/waves-build
 git clone https://github.com/wavesplatform/Waves.git -b ${WAVES_VERSION}
 pushd Waves
 
+sed -i 's/buster/unstable/' docker/Dockerfile
 ./build-with-docker.sh && docker buildx build --platform ${ARCH} --tag ${REPO_NAME}/waves:${GOOL_VERSION} docker ${DO_PUSH}
 
 popd

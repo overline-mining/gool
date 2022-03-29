@@ -15,6 +15,10 @@ case $(lscpu | grep Architecture | awk '{print $2}') in
   aarch64*)
     export BUILD_ARCH=arm64
   ;;
+  
+  i686)
+    export BUILD_ARCH=386
+  ;;
 
   *)
     exit 1

@@ -64,7 +64,8 @@ jobs:
       -
         name: Build all targets
         run: |
-          docker buildx build --platform linux/amd64,linux/arm/v7,linux/arm64 --tag ${{ secrets.DOCKERHUB_ACCOUNT }}/geth:pr-test -f docker/Dockerfile.geth .
+          
+          docker buildx build --platform linux/amd64,linux/arm/v7,linux/arm64,linux/386 --tag ${{ secrets.DOCKERHUB_ACCOUNT }}/geth:pr-test -f docker/Dockerfile.geth .
 
   bitcoind:
     needs: test
@@ -83,7 +84,8 @@ jobs:
       -
         name: Build all targets
         run: |
-          docker buildx build --platform linux/amd64,linux/arm/v7,linux/arm64 --tag ${{ secrets.DOCKERHUB_ACCOUNT }}/bitcoin-core:pr-test -f docker/Dockerfile.bitcoin-core .
+          PLATFORMS=linux/amd64,linux/arm/v7,linux/arm64,linux/ppc64le,linux/riscv64
+          docker buildx build --platform $PLATFORMS --tag ${{ secrets.DOCKERHUB_ACCOUNT }}/bitcoin-core:pr-test -f docker/Dockerfile.bitcoin-core .
 
   waves:
     needs: test
@@ -102,7 +104,8 @@ jobs:
       -
         name: Build all targets
         run: |
-          docker/build-waves.sh linux/amd64,linux/arm/v7,linux/arm64 ${{ secrets.DOCKERHUB_ACCOUNT }} pr-test
+          PLATFORMS=linux/amd64,linux/arm/v7,linux/arm64,linux/ppc64le,linux/s390x,linux/386,linux/arm/v5,linux/mips64le,linux/riscv64
+          docker/build-waves.sh $PLATFORMS ${{ secrets.DOCKERHUB_ACCOUNT }} pr-test
 
   neo:
     needs: test
