@@ -10,7 +10,7 @@ pushd $(pwd)/waves-build
 git clone https://github.com/wavesplatform/Waves.git -b ${WAVES_VERSION}
 pushd Waves
 
-./build-with-docker.sh && docker build -t ${REPO_NAME}/waves:${GOOL_VERSION} -t ${REPO_NAME}/waves:latest docker
+{ ./build-with-docker.sh && docker build -t ${REPO_NAME}/waves:${GOOL_VERSION} -t ${REPO_NAME}/waves:latest docker } || { echo "WAVES BUILD FAILED"; popd; popd; rm -rf $(pwd)/waves-build; exit 1; } 
 
 popd
 

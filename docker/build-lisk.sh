@@ -14,7 +14,7 @@ git clone https://github.com/LiskHQ/lisk-core.git -b ${LISK_VERSION}
 mv Dockerfile.lisk lisk-core/docker/Dockerfile
 pushd lisk-core/docker
 
-docker buildx build --platform ${ARCH} --tag ${REPO_NAME}/lisk:${GOOL_VERSION} . ${DO_PUSH} || {echo "LISK BUILD FAILED"; popd; popd; rm -rf $(pwd)/lisk-build; exit 1;}
+docker buildx build --platform ${ARCH} --tag ${REPO_NAME}/lisk:${GOOL_VERSION} . ${DO_PUSH} || { echo "LISK BUILD FAILED"; popd; popd; rm -rf $(pwd)/lisk-build; exit 1; }
 
 popd
 
