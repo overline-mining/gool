@@ -1,6 +1,7 @@
 package database
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -17,13 +18,16 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	probar "github.com/schollz/progressbar/v3"
 )
 
 var ChainstateBlocks = []byte("CHAINSTATE-BLOCKS")
 var ChainstateTxs = []byte("CHAINSTATE-TXS")
 var ChainstateMTxs = []byte("CHAINSTATE-MTXS")
 var OverlineBlockChunks = []byte("OVERLINE-BLOCK-CHUNKS")
-var OverlineBlockChuckMap = []byte("OVERLINE-BLOCK-CHUNK-MAP")
+var OverlineBlockChunkMap = []byte("OVERLINE-BLOCK-CHUNK-MAP")
+var OverlineHeightToHashMap = []byte("OVERLINE-BLOCK-HEIGHT-TO-HASH")
 var SyncInfo = []byte("SYNC-INFO")
 
 type OverlineDBConfig struct {
@@ -41,6 +45,34 @@ func DefaultOverlineDBConfig() OverlineDBConfig {
 		IncomingBlocksSize: 1000,
 		ActiveSet:          100,
 		AncientChunkSize:   1000,
+	}
+}
+
+func orderedPairPrint(first, second *p2p_pb.BcBlock) {
+	zap.S().Debugf(
+		"Ordered block pair check: %v (%v, %v) -> %v (%v, %v)",
+		first.GetHeight(),
+		common.BriefHash(first.GetHash()),
+		common.BriefHash(first.GetPreviousHash()),
+		second.GetHeight(),
+		common.BriefHash(second.GetHash()),
+		common.BriefHash(second.GetPreviousHash()),
+	)
+}
+
+func orderedPairCheck(first, second *p2p_pb.BcBlock) {
+	if !validation.OrderedBlockPairIsValid(first, second) {
+		common.CheckError(
+			errors.New(
+				fmt.Sprintf(
+					"%v (%v, %v) -> %v (%v, %v) Invalid pair!",
+					first.GetHeight(),
+					common.BriefHash(first.GetHash()),
+					common.BriefHash(first.GetPreviousHash()),
+					second.GetHeight(),
+					common.BriefHash(second.GetHash()),
+					common.BriefHash(second.GetPreviousHash()),
+				)))
 	}
 }
 
@@ -317,6 +349,11 @@ func (odb *OverlineDB) getSerializedBlock(blockHash []byte) (*p2p_pb.BcBlock, er
 func (odb *OverlineDB) FlushToDisk() {
 	odb.mu.Lock()
 	odb.txMu.Lock()
+
+	if len(odb.incomingBlocks) > odb.Config.AncientChunkSize {
+		odb.runSerialization()
+	}
+
 	err := odb.db.Update(func(tx *bolt.Tx) error {
 		chainstate_blocks := tx.Bucket(ChainstateBlocks)
 		chainstate_txs := tx.Bucket(ChainstateTxs)
@@ -374,72 +411,7 @@ func (odb *OverlineDB) Run() {
 		for {
 			odb.mu.Lock()
 			if len(odb.incomingBlocks) > odb.Config.IncomingBlocksSize {
-				for hash, newBlock := range odb.incomingBlocks {
-					odb.toSerialize = append(odb.toSerialize, newBlock)
-					delete(odb.incomingBlocks, hash)
-				}
-				sort.SliceStable(odb.toSerialize, func(i, j int) bool {
-					if odb.toSerialize[i].GetHeight() == odb.toSerialize[j].GetHeight() {
-						iDist, _ := new(big.Int).SetString(odb.toSerialize[i].GetTotalDistance(), 10)
-						jDist, _ := new(big.Int).SetString(odb.toSerialize[j].GetTotalDistance(), 10)
-						compare := iDist.Cmp(jDist)
-						if compare == 0 {
-							return odb.toSerialize[i].GetTimestamp() < odb.toSerialize[j].GetTimestamp()
-						}
-						return compare < 0
-					}
-					return odb.toSerialize[i].GetHeight() < odb.toSerialize[j].GetHeight()
-				})
-				if len(odb.toSerialize) > odb.Config.AncientChunkSize {
-					toSerialize := odb.toSerialize[:odb.Config.AncientChunkSize]
-					if odb.tipOfSerializedChain != nil {
-						if !validation.OrderedBlockPairIsValid(odb.tipOfSerializedChain, toSerialize[0]) {
-							common.CheckError(
-								errors.New(
-									fmt.Sprintf(
-										"%v (%v, %v) -> %v (%v, %v) Invalid pair!",
-										odb.tipOfSerializedChain.GetHeight(),
-										common.BriefHash(odb.tipOfSerializedChain.GetHash()),
-										common.BriefHash(odb.tipOfSerializedChain.GetPreviousHash()),
-										toSerialize[0].GetHeight(),
-										common.BriefHash(toSerialize[0].GetHash()),
-										common.BriefHash(toSerialize[0].GetPreviousHash()),
-									)))
-						}
-					}
-					for iblk := 0; iblk < len(toSerialize)-1; iblk++ {
-						zap.S().Debugf(
-							"Ordered block pair check: %v (%v, %v) -> %v (%v, %v)",
-							toSerialize[iblk].GetHeight(),
-							common.BriefHash(toSerialize[iblk].GetHash()),
-							common.BriefHash(toSerialize[iblk].GetPreviousHash()),
-							toSerialize[iblk+1].GetHeight(),
-							common.BriefHash(toSerialize[iblk+1].GetHash()),
-							common.BriefHash(toSerialize[iblk+1].GetPreviousHash()),
-						)
-						if !validation.OrderedBlockPairIsValid(toSerialize[iblk], toSerialize[iblk+1]) {
-							common.CheckError(
-								errors.New(
-									fmt.Sprintf(
-										"%v (%v, %v) -> %v (%v, %v) Invalid pair!",
-										toSerialize[iblk].GetHeight(),
-										common.BriefHash(toSerialize[iblk].GetHash()),
-										common.BriefHash(toSerialize[iblk].GetPreviousHash()),
-										toSerialize[iblk+1].GetHeight(),
-										common.BriefHash(toSerialize[iblk+1].GetHash()),
-										common.BriefHash(toSerialize[iblk+1].GetPreviousHash()),
-									)))
-						}
-					}
-					odb.serializeBlocks(toSerialize)
-					odb.tipOfSerializedChain = toSerialize[odb.Config.AncientChunkSize-1]
-					zap.S().Debugf("Set tipOfSerializedChain to: %v %v", odb.tipOfSerializedChain.GetHeight(), common.BriefHash(odb.tipOfSerializedChain.GetHash()))
-					// add unserialized blocks back to incomingBlocks
-					for _, block := range odb.toSerialize[odb.Config.AncientChunkSize:] {
-						odb.incomingBlocks[block.GetHash()] = block
-					}
-					odb.toSerialize = make([]*p2p_pb.BcBlock, 0, 10*odb.Config.AncientChunkSize)
-				}
+				odb.runSerialization()
 				odb.mu.Unlock()
 			} else {
 				odb.mu.Unlock()
@@ -450,6 +422,144 @@ func (odb *OverlineDB) Run() {
 	// Run itself handles serialization,
 	// we wait for the block height to progress
 
+}
+
+func (odb *OverlineDB) FullLocalValidation() {
+	odb.mu.Lock()
+	decompressionBuf := make([]byte, 0x3000000) // 50MB should be enough to cover
+	err := odb.db.View(func(tx *bolt.Tx) error {
+		heights := tx.Bucket(OverlineHeightToHashMap)
+		chunks := tx.Bucket(OverlineBlockChunks)
+		block2chunk := tx.Bucket(OverlineBlockChunkMap)
+
+		c := heights.Cursor()
+
+		lastHeight := odb.tipOfSerializedChain.GetHeight()
+		bar := probar.Default(int64(lastHeight), "full validation ->")
+
+		seekBytes := make([]byte, 8)
+		binary.BigEndian.PutUint64(seekBytes, uint64(1))
+
+		currentChunk := make([]byte, 32)
+		blockMap := make(map[string]*p2p_pb.BcBlock)
+		for k, v := c.Seek(seekBytes); k != nil; k, v = c.Next() {
+			height := binary.BigEndian.Uint64(k)
+			hash := hex.EncodeToString(v)
+			chunkHash := block2chunk.Get(v)
+			chunk := chunks.Get(chunkHash)
+
+			if bytes.Compare(currentChunk, chunkHash) != 0 {
+				blockMap = make(map[string]*p2p_pb.BcBlock) // reset the blockmap
+				nDecompressed, err := lz4.UncompressBlock(chunk, decompressionBuf[0:])
+				if err != nil {
+					return err
+				}
+				blockList := p2p_pb.BcBlocks{}
+				err = proto.Unmarshal(decompressionBuf[:nDecompressed], &blockList)
+				if err != nil {
+					return err
+				}
+				for _, block := range blockList.Blocks {
+					blockMap[block.GetHash()] = block
+				}
+				strCurrentChunk := hex.EncodeToString(currentChunk)
+				strChunkHash := hex.EncodeToString(chunkHash)
+				zap.S().Debugf("Updating chunk hash from %s to %s", common.BriefHash(strCurrentChunk), common.BriefHash(strChunkHash))
+				copy(currentChunk, chunkHash)
+			}
+			block := blockMap[hash]
+			isValid, err := validation.IsValidBlock(block)
+			if err != nil {
+				zap.S().Errorf("%v: %v", common.BriefHash(hash), err)
+			}
+			if isValid {
+				var prevBlock *p2p_pb.BcBlock
+				if _, ok := blockMap[block.GetPreviousHash()]; !ok {
+					zap.S().Debugf("Block's previous hash %v was not in chunk!", block.GetPreviousHash())
+					temp := p2p_pb.BcBlocks{}
+					prevKey, err := hex.DecodeString(block.GetPreviousHash())
+					prevChunkHash := block2chunk.Get(prevKey)
+					prevChunk := chunks.Get(prevChunkHash)
+					nDecompressed, err := lz4.UncompressBlock(prevChunk, decompressionBuf[0:])
+					if err != nil {
+						return err
+					}
+					err = proto.Unmarshal(decompressionBuf[:nDecompressed], &temp)
+					if err != nil {
+						return err
+					}
+					for _, blk := range temp.Blocks {
+						if blk.GetHash() == block.GetPreviousHash() {
+							zap.S().Debugf("Found previous hash -> %v", blk.GetHash())
+							prevBlock = blk
+							break
+						}
+					}
+				} else {
+					prevBlock = blockMap[block.GetPreviousHash()]
+				}
+				if prevBlock == nil {
+					if block.GetHeight() == 1 {
+						zap.S().Debugf("Genesis block does not have a previous block to find.")
+					} else {
+						zap.S().Warnf("Could not find previous hash for block %v", block.GetHash())
+					}
+					continue
+				}
+				if !validation.OrderedBlockPairIsValid(prevBlock, block) {
+					errstr := fmt.Sprintf("%v -> %v does not form a valid chain", prevBlock.GetHash(), block.GetHash())
+					zap.S().Debug(errstr)
+					return errors.New(errstr)
+				} else {
+					zap.S().Debugf("%v -> %v forms a valid chain", prevBlock.GetHash(), block.GetHash())
+				}
+			} else {
+				zap.S().Debugf("Invalid block %v has height %v, expecting %v", common.BriefHash(block.GetHash()), block.GetHeight(), height)
+				return err
+			}
+			bar.Add(1)
+		}
+		return nil
+	})
+	common.CheckError(err)
+	odb.mu.Unlock()
+}
+
+func (odb *OverlineDB) runSerialization() {
+	for hash, newBlock := range odb.incomingBlocks {
+		odb.toSerialize = append(odb.toSerialize, newBlock)
+		delete(odb.incomingBlocks, hash)
+	}
+	sort.SliceStable(odb.toSerialize, func(i, j int) bool {
+		if odb.toSerialize[i].GetHeight() == odb.toSerialize[j].GetHeight() {
+			iDist, _ := new(big.Int).SetString(odb.toSerialize[i].GetTotalDistance(), 10)
+			jDist, _ := new(big.Int).SetString(odb.toSerialize[j].GetTotalDistance(), 10)
+			compare := iDist.Cmp(jDist)
+			if compare == 0 {
+				return odb.toSerialize[i].GetTimestamp() < odb.toSerialize[j].GetTimestamp()
+			}
+			return compare < 0
+		}
+		return odb.toSerialize[i].GetHeight() < odb.toSerialize[j].GetHeight()
+	})
+	if len(odb.toSerialize) > odb.Config.AncientChunkSize {
+		toSerialize := odb.toSerialize[:odb.Config.AncientChunkSize]
+		if odb.tipOfSerializedChain != nil {
+			orderedPairCheck(odb.tipOfSerializedChain, toSerialize[0])
+		}
+		for iblk := 0; iblk < len(toSerialize)-1; iblk++ {
+			orderedPairPrint(toSerialize[iblk], toSerialize[iblk+1])
+			orderedPairCheck(toSerialize[iblk], toSerialize[iblk+1])
+		}
+		odb.serializeBlocks(toSerialize)
+		odb.tipOfSerializedChain = toSerialize[odb.Config.AncientChunkSize-1]
+		zap.S().Debugf("Set tipOfSerializedChain to: %v %v", odb.tipOfSerializedChain.GetHeight(), common.BriefHash(odb.tipOfSerializedChain.GetHash()))
+		// add unserialized blocks back to incomingBlocks
+		for _, block := range odb.toSerialize[odb.Config.AncientChunkSize:] {
+			odb.incomingBlocks[block.GetHash()] = block
+		}
+		odb.toSerialize = make([]*p2p_pb.BcBlock, 0, 10*odb.Config.AncientChunkSize)
+	}
 }
 
 func (odb *OverlineDB) serializeBlocks(inblocks []*p2p_pb.BcBlock) error {

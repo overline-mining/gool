@@ -126,23 +126,17 @@ func (mh *OverlineMessageHandler) Run() {
 		cursor := 0
 		currentMessage := make([]byte, 0)
 		var err error
-		zap.S().Debugf("OverlineMessageHandler::Run START")
-		zap.S().Debugf("OverlineMessageHandler::Run -> mh.buflen is %v bytes", mh.buflen)
 		if mh.buflen < 4 {
-			zap.S().Debugf("OverlineMessageHandler::Run -> starting with buffer %v", mh.buf[:mh.buflen])
 			n, err = mh.Peer.Conn.Read(mh.buf[mh.buflen:])
 			if err != nil {
 				zap.S().Errorf("closing peer %v: %v", hex.EncodeToString(mh.Peer.ID), err)
 				return
 			}
 			mh.buflen += n
-			zap.S().Debugf("OverlineMessageHandler::Run -> read %v bytes %v", n, mh.buf[:20])
 		} else {
 			n = mh.buflen
 		}
-		zap.S().Debugf("OverlineMessageHandler::Run -> cursor is %v (%v)", cursor, mh.buf[:8])
 		msgLen := int(binary.BigEndian.Uint32(mh.buf[cursor : cursor+4]))
-		zap.S().Debugf("OverlineMessageHandler::Run -> expect message of length %v", msgLen)
 		cursor += 4
 		if (n - cursor) < msgLen {
 			// get the block part out of the buffer
@@ -168,15 +162,14 @@ func (mh *OverlineMessageHandler) Run() {
 					for currentMessage[len(currentMessage)-backup-1] == 0 || currentMessage[len(currentMessage)-backup-2] == 0 {
 						backup++
 					}
-					zap.S().Debugf("OverlineMessageHandler::Run -> msgLen=%v ntot=%v, cursor=%v backup=%v", msgLen, ntot, cursor, backup)
 					currentMessage = currentMessage[:len(currentMessage)-backup]
 					cursor = msgLen - ntot - backup
-					begin := cursor - 20
-					if cursor-20 < 0 {
-						begin = 0
-					}
-					zap.S().Debugf("OverlineMessageHandler::Run -> %v", currentMessage[len(currentMessage)-20:])
-					zap.S().Debugf("OverlineMessageHandler::Run -> %v  %v", mh.buf[begin:cursor], mh.buf[cursor:cursor+20])
+					/*
+						begin := cursor - 20
+						if cursor-20 < 0 {
+							begin = 0
+						}
+					*/
 					ntot += (msgLen - ntot)
 					break
 				}
@@ -202,13 +195,16 @@ func (mh *OverlineMessageHandler) Run() {
 			checkError(err)
 		}
 		msgType := string(parts[0])
-		zap.S().Debugf("OverlineMessageHandler::Run -> Received message of type: %v", msgType)
 
 		mh.Mu.Lock()
 		newMessage := OverlineMessage{ID: messageCounter, Type: msgType, PeerID: mh.Peer.ID, Value: bytes.Join(parts[1:], []byte(messages.SEPARATOR))}
 		messageCounter++
 		*mh.Messages = append(*mh.Messages, newMessage)
-		zap.S().Debugf("OverlineMessageHandler::Run -> Appended message %v to queue: %v %v %v", newMessage.ID, newMessage.Type, hex.EncodeToString(newMessage.PeerID), len(newMessage.Value))
+		zap.L().Debug("OverlineMessageHandler::Run -> Appended message to queue: ",
+			zap.Uint64("ID", newMessage.ID),
+			zap.String("Type", newMessage.Type),
+			zap.String("PeerID", hex.EncodeToString(newMessage.PeerID)),
+			zap.Int("msgLen", len(newMessage.Value)))
 		mh.Mu.Unlock()
 	}
 }
@@ -310,9 +306,9 @@ func main() {
 	} else {
 		startingHeight = gooldb.SerializedHeight()
 	}
+	defer gooldb.Close()
 
 	checkError(err)
-	defer gooldb.Close()
 
 	// add ctrl-c catcher for closing the database
 	c := make(chan os.Signal)
@@ -322,6 +318,11 @@ func main() {
 		gooldb.Close()
 		os.Exit(1)
 	}()
+
+	// run full local validation if requested
+	if *validateFullChain {
+		gooldb.FullLocalValidation()
+	}
 
 	// start the gool ingestion thread
 	gooldb.Run()
@@ -556,6 +557,9 @@ func main() {
 		iStride := uint64(0)
 		topRange := uint64(startingHeight + (iStride+1)*blockStride + 1)
 		for {
+			if !gooldb.IsInitialBlockDownload() {
+				break
+			}
 			olHandlerMapMu.Lock()
 			for peer, messageHandler := range olMessageHandlers {
 				olMessageMu.Lock()
@@ -594,7 +598,7 @@ func main() {
 
 				iStride += 1
 				if iStride%100 == 0 { // if we've submitted a request for 1000 blocks - wait until we have received them all
-					zap.S().Debugf("Submitted block requests for range [%v,%v]", (iStride-100)*blockStride, iStride*blockStride)
+					zap.S().Debugf("Submitted block requests for range [%v,%v]", startingHeight+(iStride-100)*blockStride, startingHeight+iStride*blockStride)
 					for {
 						ibdWorkList.Mu.Lock()
 						nBlocksRemaining := len(ibdWorkList.AllowedBlocks)
@@ -613,6 +617,7 @@ func main() {
 			olHandlerMapMu.Unlock()
 			time.Sleep(time.Millisecond * 250)
 		}
+		zap.L().Info("Initial block download has completed.")
 	}()
 
 	defer func() {
