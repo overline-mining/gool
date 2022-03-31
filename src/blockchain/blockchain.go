@@ -7,6 +7,7 @@ import (
 	//"github.com/overline-mining/gool/src/validation"
 	p2p_pb "github.com/overline-mining/gool/src/protos"
 	"go.uber.org/zap"
+	"sync"
 )
 
 const (
@@ -15,6 +16,8 @@ const (
 )
 
 type OverlineBlockchain struct {
+	Mu         sync.Mutex
+	Heads      map[string]bool
 	BlockGraph *dagger.Graph
 	DB         *database.OverlineDB
 }
@@ -50,12 +53,15 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 			parentNode.Attributes["block"].(*p2p_pb.BcBlock).GetHash(),
 			found,
 		)
-		_, err := obc.BlockGraph.SetEdge(blkNode.Path, parentNode.Path, dagger.Node{
-			Path: dagger.Path{
-				XType: CONNECTION_TYPE,
-			},
-			Attributes: map[string]interface{}{},
-		})
+		_, err := obc.BlockGraph.SetEdge(
+			parentNode.Path,
+			blkNode.Path,
+			dagger.Node{
+				Path: dagger.Path{
+					XType: CONNECTION_TYPE,
+				},
+				Attributes: map[string]interface{}{},
+			})
 		if err != nil {
 			zap.S().Panic(err)
 		}
@@ -66,12 +72,35 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 			common.BriefHash(block.GetHash()),
 			block.GetHeight(),
 		)
+		obc.Mu.Lock()
+		obc.Heads[block.GetHash()] = true
+		obc.Mu.Unlock()
 	}
-	obc.BlockGraph.DFS(CONNECTION_TYPE, blkNode.Path, func(node dagger.Node) bool {
-		zap.S().Debugf("(%v) DFS: %s", node.Attributes["block"].(*p2p_pb.BcBlock).GetHeight(), node.Attributes["block"].(*p2p_pb.BcBlock).GetHash())
-		return true
-	})
-	zap.S().Debugf("(%v) DFS-ROOT: %s", block.GetHeight(), block.GetHash())
+	// copying is faster than locking on the outer loop of the DFS
+	obc.Mu.Lock()
+	// first clean up the chain, scan all heads for now-existing
+	heads := make(map[string]bool)
+	for h, v := range obc.Heads {
+		heads[h] = v
+	}
+	obc.Mu.Unlock()
+	for hash, _ := range heads {
+		headNode, found := obc.BlockGraph.GetNode(
+			dagger.Path{
+				XID:   hash,
+				XType: BLOCK_TYPE,
+			})
+		if !found {
+			zap.S().Panicf("Could not find head node %v", common.BriefHash(hash))
+		}
+		obc.BlockGraph.DFS(CONNECTION_TYPE, headNode.Path, func(node dagger.Node) bool {
+			blk := node.Attributes["block"].(*p2p_pb.BcBlock)
+			zap.S().Debugf("(%v) DFS: %s -> %s", blk.GetHeight(), blk.GetHash(), blk.GetPreviousHash())
+			return true
+		})
+		headBlock := headNode.Attributes["block"].(*p2p_pb.BcBlock)
+		zap.S().Debugf("(%v) DFS-ROOT: %s -> %s", headBlock.GetHeight(), headBlock.GetHash(), headBlock.GetPreviousHash())
+	}
 }
 
 func (obc *OverlineBlockchain) AddBlockRange(blocks *p2p_pb.BcBlocks) {

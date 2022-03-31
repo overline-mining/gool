@@ -335,6 +335,7 @@ func main() {
 	ovlChain := chain.OverlineBlockchain{
 		BlockGraph: dagger.NewGraph(),
 		DB:         &gooldb,
+		Heads:      make(map[string]bool),
 	}
 
 	id_bytes := make([]byte, 32)
