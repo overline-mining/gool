@@ -18,7 +18,7 @@ pushd neo-node
 
 sed -i 's/netcoreapp2.1/netcoreapp3.1/' neo-cli/neo-cli.csproj
 
-docker build --build-arg NEO_VERSION=${NEO_VERSION} -t ${REPO_NAME}/neo:${GOOL_VERSION} -t ${REPO_NAME}/neo:latest .
+docker build --build-arg NEO_VERSION=${NEO_VERSION} -t ${REPO_NAME}/neo:${GOOL_VERSION} -t ${REPO_NAME}/neo:latest . || {echo "NEO BUILD FAILED"; popd; popd; rm -rf $(pwd)/neo-build; exit 1;}
 
 popd
 
