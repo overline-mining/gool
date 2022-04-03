@@ -245,6 +245,13 @@ func (odb *OverlineDB) SerializedHeight() uint64 {
 	return odb.tipOfSerializedChain.GetHeight()
 }
 
+func (odb *OverlineDB) HighestSerializedBlock() p2p_pb.BcBlock {
+	odb.mu.Lock()
+	defer odb.mu.Unlock()
+	block := *odb.tipOfSerializedChain
+	return block
+}
+
 func (odb *OverlineDB) AddBlock(block *p2p_pb.BcBlock) error {
 	isValid, err := validation.IsValidBlock(block)
 	if !isValid {

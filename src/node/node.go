@@ -95,13 +95,13 @@ type OverlineMessageHandler struct {
 	Peer     OverlinePeer
 	Messages *[]OverlineMessage
 	ID       []byte
-	buf      [0x100000]byte // 1 MB buffer for work
+	buf      [0xa00000]byte // 10 MB buffer for work
 	buflen   int
 }
 
 func (mh *OverlineMessageHandler) Initialize(conn net.Conn) {
-	mh.Mu.Lock()
-	defer mh.Mu.Unlock()
+	//mh.Mu.Lock()
+	//defer mh.Mu.Unlock()
 
 	mh.buflen = 0
 
@@ -332,11 +332,13 @@ func main() {
 	ibdWorkList := IBDWorkList{AllowedBlocks: make(map[uint64]uint64)}
 
 	// create the chain ingester
-	ovlChain := chain.OverlineBlockchain{
-		BlockGraph: dagger.NewGraph(),
-		DB:         &gooldb,
-		Heads:      make(map[string]bool),
+	goolChain := chain.OverlineBlockchain{
+		BlockGraph:                       dagger.NewGraph(),
+		DB:                               &gooldb,
+		Heads:                            make(map[string]bool),
+		IbdTransitionPeriodRelativeDepth: float64(0.005),
 	}
+	goolChain.UnsetFollowingChain()
 
 	id_bytes := make([]byte, 32)
 	rand.Read(id_bytes)
@@ -490,6 +492,21 @@ func main() {
 
 	go func() {
 		for {
+			heightDbl := float64(gooldb.SerializedHeight())
+			thresholdDbl := heightDbl + float64(gooldb.Config.AncientChunkSize)
+			lowestNonZeroPeerHeight := float64(0)
+			olHandlerMapMu.Lock()
+			for _, msgHandler := range olMessageHandlers {
+				floatHeight := float64(msgHandler.Peer.Height)
+				zap.S().Debugf("Peer height -> %f", floatHeight)
+				if floatHeight > 0 && (floatHeight < lowestNonZeroPeerHeight || lowestNonZeroPeerHeight == float64(0)) {
+					lowestNonZeroPeerHeight = floatHeight
+				}
+			}
+			olHandlerMapMu.Unlock()
+			if !goolChain.IsFollowingChain() && lowestNonZeroPeerHeight*(1-goolChain.IbdTransitionPeriodRelativeDepth) < thresholdDbl {
+				goolChain.SetFollowingChain()
+			}
 			olMessageMu.Lock()
 			if len(olMessages) > 0 {
 				zap.S().Debugf("There are %v messages in the queue!", len(olMessages))
@@ -515,7 +532,13 @@ func main() {
 							ibdBar.Add(len(blocks.Blocks))
 						}
 						if err == nil {
-							gooldb.AddBlockRange(&blocks)
+							if goolChain.IsFollowingChain() {
+								for _, block := range blocks.Blocks {
+									goolChain.AddBlock(block)
+								}
+							} else if gooldb.IsInitialBlockDownload() {
+								gooldb.AddBlockRange(&blocks)
+							}
 						} else {
 							zap.S().Error(err)
 						}
@@ -526,14 +549,16 @@ func main() {
 						isValid, err := validation.IsValidBlock(b)
 						if isValid {
 							peerIDHex := hex.EncodeToString(oneMessage.PeerID)
+							olHandlerMapMu.Lock()
 							msgHandler := olMessageHandlers[peerIDHex]
 							msgHandler.Peer.Height = b.GetHeight()
 							olMessageHandlers[peerIDHex] = msgHandler
+							olHandlerMapMu.Unlock()
 							zap.S().Debugf("Received Valid BLOCK: Set Height of %v to %v", peerIDHex, b.GetHeight())
-							ovlChain.AddBlock(b)
-							if !gooldb.IsInitialBlockDownload() {
-								gooldb.AddBlock(b)
-							} else {
+							if goolChain.IsFollowingChain() {
+								goolChain.AddBlock(b)
+							}
+							if gooldb.IsInitialBlockDownload() {
 								height_i64 := int64(b.GetHeight())
 								if height_i64 > ibdBar.GetMax64() {
 									ibdBar.ChangeMax64(height_i64)
@@ -564,75 +589,73 @@ func main() {
 		}
 	}()
 
-	/*
-		go func() {
-			blockStride := uint64(10)
-			iStride := uint64(0)
-			topRange := uint64(startingHeight + (iStride+1)*blockStride + 1)
-			for {
-				if !gooldb.IsInitialBlockDownload() {
-					break
-				}
-				olHandlerMapMu.Lock()
-				for peer, messageHandler := range olMessageHandlers {
-					olMessageMu.Lock()
-					if messageHandler.Peer.Height == 0 || messageHandler.Peer.Height < topRange {
-						olMessageMu.Unlock()
-						continue
-					}
-					low, high := uint64(iStride*blockStride), uint64((iStride+1)*blockStride)
-					low += startingHeight + 1
-					high += startingHeight + 1
-					if high > messageHandler.Peer.Height {
-						high = messageHandler.Peer.Height
-					}
-					ibdWorkList.Mu.Lock()
-					for i := low; i < high; i++ {
-						ibdWorkList.AllowedBlocks[i] = low
-					}
-					ibdWorkList.Mu.Unlock()
-					reqstr := messages.GET_DATA + messages.SEPARATOR + fmt.Sprintf("%d%s%d", low, messages.SEPARATOR, high)
-					reqLen := len(reqstr)
-					request := make([]byte, reqLen+4)
-					binary.BigEndian.PutUint32(request[0:], uint32(reqLen))
-					copy(request[4:], []byte(reqstr))
-
-					zap.S().Debugf("Sending request: %v -> %v", peer, reqstr)
-
-					// write the request to the connection
-					n, err := messageHandler.Peer.Conn.Write(request)
-					//zap.S().Debugf("Wrote %v bytes to the outbound connection!", n)
-					if n != len(request) {
-						zap.S().Fatal("Fatal error: didn't write complete request to outbound connection!")
-						os.Exit(1)
-					}
-					checkError(err)
+	go func() {
+		blockStride := uint64(10)
+		iStride := uint64(0)
+		topRange := uint64(startingHeight + (iStride+1)*blockStride + 1)
+		for {
+			if !gooldb.IsInitialBlockDownload() {
+				break
+			}
+			olHandlerMapMu.Lock()
+			for peer, messageHandler := range olMessageHandlers {
+				olMessageMu.Lock()
+				if messageHandler.Peer.Height == 0 || messageHandler.Peer.Height < topRange {
 					olMessageMu.Unlock()
+					continue
+				}
+				low, high := uint64(iStride*blockStride), uint64((iStride+1)*blockStride)
+				low += startingHeight + 1
+				high += startingHeight + 1
+				if high > messageHandler.Peer.Height {
+					high = messageHandler.Peer.Height
+				}
+				ibdWorkList.Mu.Lock()
+				for i := low; i < high; i++ {
+					ibdWorkList.AllowedBlocks[i] = low
+				}
+				ibdWorkList.Mu.Unlock()
+				reqstr := messages.GET_DATA + messages.SEPARATOR + fmt.Sprintf("%d%s%d", low, messages.SEPARATOR, high)
+				reqLen := len(reqstr)
+				request := make([]byte, reqLen+4)
+				binary.BigEndian.PutUint32(request[0:], uint32(reqLen))
+				copy(request[4:], []byte(reqstr))
 
-					iStride += 1
-					if iStride%100 == 0 { // if we've submitted a request for 1000 blocks - wait until we have received them all
-						zap.S().Debugf("Submitted block requests for range [%v,%v]", startingHeight+(iStride-100)*blockStride, startingHeight+iStride*blockStride)
-						for {
-							ibdWorkList.Mu.Lock()
-							nBlocksRemaining := len(ibdWorkList.AllowedBlocks)
-							ibdWorkList.Mu.Unlock()
-							if nBlocksRemaining == 0 {
-								break
-							} else {
-								zap.S().Debugf("waiting for %v blocks to arrive...", nBlocksRemaining)
-								time.Sleep(time.Millisecond * 500)
-							}
+				zap.S().Debugf("Sending request: %v -> %v", peer, reqstr)
+
+				// write the request to the connection
+				n, err := messageHandler.Peer.Conn.Write(request)
+				//zap.S().Debugf("Wrote %v bytes to the outbound connection!", n)
+				if n != len(request) {
+					zap.S().Fatal("Fatal error: didn't write complete request to outbound connection!")
+					os.Exit(1)
+				}
+				checkError(err)
+				olMessageMu.Unlock()
+
+				iStride += 1
+				if iStride%100 == 0 { // if we've submitted a request for 1000 blocks - wait until we have received them all
+					zap.S().Debugf("Submitted block requests for range [%v,%v]", startingHeight+(iStride-100)*blockStride, startingHeight+iStride*blockStride)
+					for {
+						ibdWorkList.Mu.Lock()
+						nBlocksRemaining := len(ibdWorkList.AllowedBlocks)
+						ibdWorkList.Mu.Unlock()
+						if nBlocksRemaining == 0 {
+							break
+						} else {
+							zap.S().Debugf("waiting for %v blocks to arrive...", nBlocksRemaining)
+							time.Sleep(time.Millisecond * 500)
 						}
 					}
-
-					topRange = uint64(startingHeight + (iStride+1)*blockStride + 1)
 				}
-				olHandlerMapMu.Unlock()
-				time.Sleep(time.Millisecond * 250)
+
+				topRange = uint64(startingHeight + (iStride+1)*blockStride + 1)
 			}
-			zap.L().Info("Initial block download has completed.")
-		}()
-	*/
+			olHandlerMapMu.Unlock()
+			time.Sleep(time.Millisecond * 250)
+		}
+		zap.L().Info("Initial block download has completed.")
+	}()
 
 	defer func() {
 		olHandlerMapMu.Lock()
@@ -648,7 +671,7 @@ func main() {
 	return
 }
 
-func handshake_peer(conn net.Conn, id []byte, buf *[0x100000]byte) ([]byte, int, error) {
+func handshake_peer(conn net.Conn, id []byte, buf *[0xa00000]byte) ([]byte, int, error) {
 	peerHandshake := make([]byte, 0)
 
 	lenSize := binary.PutUvarint(buf[0:], uint64(len(id)))

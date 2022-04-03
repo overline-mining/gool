@@ -16,10 +16,31 @@ const (
 )
 
 type OverlineBlockchain struct {
-	Mu         sync.Mutex
-	Heads      map[string]bool
-	BlockGraph *dagger.Graph
-	DB         *database.OverlineDB
+	Mu                               sync.Mutex
+	followMu                         sync.Mutex
+	Heads                            map[string]bool
+	BlockGraph                       *dagger.Graph
+	DB                               *database.OverlineDB
+	isFollowingChain                 bool
+	IbdTransitionPeriodRelativeDepth float64
+}
+
+func (obc *OverlineBlockchain) SetFollowingChain() {
+	obc.followMu.Lock()
+	obc.isFollowingChain = true
+	obc.followMu.Unlock()
+}
+
+func (obc *OverlineBlockchain) UnsetFollowingChain() {
+	obc.followMu.Lock()
+	obc.isFollowingChain = false
+	obc.followMu.Unlock()
+}
+
+func (obc *OverlineBlockchain) IsFollowingChain() bool {
+	obc.followMu.Lock()
+	defer obc.followMu.Unlock()
+	return obc.isFollowingChain
 }
 
 func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
