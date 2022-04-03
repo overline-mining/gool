@@ -510,8 +510,6 @@ func (odb *OverlineDB) FullLocalValidation() {
 					errstr := fmt.Sprintf("%v -> %v does not form a valid chain", prevBlock.GetHash(), block.GetHash())
 					zap.S().Debug(errstr)
 					return errors.New(errstr)
-				} else {
-					zap.S().Debugf("%v -> %v forms a valid chain", prevBlock.GetHash(), block.GetHash())
 				}
 			} else {
 				zap.S().Debugf("Invalid block %v has height %v, expecting %v", common.BriefHash(block.GetHash()), block.GetHeight(), height)

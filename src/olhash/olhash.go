@@ -18,29 +18,44 @@ func Blake2blFromBytes(data []byte) []byte {
 	return hash[32:]
 }
 
+func l2norm(vec []byte) float64 {
+	t := float64(0)
+	s := float64(1)
+	r := float64(0)
+	val := float64(0)
+	for _, abyte := range vec {
+		val = float64(abyte)
+		if val > 0 {
+			if val > t {
+				r = t / val
+				s = 1 + float64(s*r*r)
+				t = val
+			} else {
+				r = val / t
+				s = s + float64(r*r)
+			}
+		}
+	}
+	return t * math.Sqrt(s)
+}
+
 func CalcDistance(work []byte, soln []byte) uint64 {
-	acc := float64(0.0)
-	num := float64(0.0)
-	den := float64(0.0)
-	norm_w := float64(0.0)
-	norm_s := float64(0.0)
+	acc := float64(0)
+	num := float64(0)
 
 	for i := 0; i < len(work)/32; i++ {
-		num = 0.0
-		den = 0.0
-		norm_w = 0.0
-		norm_s = 0.0
+		num = float64(0)
+		norm_w := l2norm(work[32*(1-i) : 32*(1-i)+32])
+		norm_s := l2norm(soln[32*i : 32*i+32])
 		for j := 0; j < 32; j++ {
 			w := float64(work[32*(1-i)+j])
 			s := float64(soln[32*i+j])
-			num += w * s
-			norm_w += w * w
-			norm_s += s * s
+			num += float64(s * w)
 		}
-		den = math.Sqrt(norm_w) * math.Sqrt(norm_s)
-		acc += (1.0 - num/den)
+		sim := 1 - float64(num/(norm_s*norm_w))
+		acc = acc + sim
 	}
-	return uint64(acc * float64(uint64(1000000000000000)))
+	return uint64(math.Floor(acc * 1000000000000000))
 }
 
 func Eval(work, miner_key, merkle_root, nonce []byte, timestamp uint64) uint64 {

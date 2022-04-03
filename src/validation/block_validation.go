@@ -217,8 +217,6 @@ func IsDistanceAboveDifficulty(block *p2p_pb.BcBlock) bool {
 func IsDistanceCorrectlyCalculated(block *p2p_pb.BcBlock) bool {
 	// we have to use a tolerance here because of javascript's weird floating point
 	// implementation
-	const tolValue = uint64(10)
-	tol := new(big.Int).SetUint64(tolValue)
 	work := prepareWork(block)
 	reCalcDistance := olhash.EvalString(work, block.GetMiner(), block.GetMerkleRoot(), block.GetNonce(), block.GetTimestamp())
 	reCalcDistanceBN := new(big.Int).SetUint64(reCalcDistance)
@@ -227,11 +225,8 @@ func IsDistanceCorrectlyCalculated(block *p2p_pb.BcBlock) bool {
 		return false
 	}
 	diff := new(big.Int).Sub(reCalcDistanceBN, distance)
-	diff.Abs(diff)
-	if diff.Uint64() != 0 {
-		zap.S().Debugf("Distances different but within tolerance: %v != %v", reCalcDistanceBN, distance)
-	}
-	return diff.Cmp(tol) <= 0
+	//diff.Abs(diff)
+	return diff.Uint64() == 0
 }
 
 func IsValidBlockTime(block *p2p_pb.BcBlock) bool {
