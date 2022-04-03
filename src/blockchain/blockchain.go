@@ -43,6 +43,19 @@ func (obc *OverlineBlockchain) IsFollowingChain() bool {
 	return obc.isFollowingChain
 }
 
+func (obc *OverlineBlockchain) connectToChildBlock(from, to dagger.Node) error {
+	_, err := obc.BlockGraph.SetEdge(
+		from.Path,
+		to.Path,
+		dagger.Node{
+			Path: dagger.Path{
+				XType: CONNECTION_TYPE,
+			},
+			Attributes: map[string]interface{}{},
+		})
+	return err
+}
+
 func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 	_, found := obc.BlockGraph.GetNode(
 		dagger.Path{
@@ -69,20 +82,12 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 		})
 	if found {
 		zap.S().Infof(
-			"got found previous hash %v -> %v %v",
-			block.GetPreviousHash(),
-			parentNode.Attributes["block"].(*p2p_pb.BcBlock).GetHash(),
+			"found previous hash in chain graph %v -> %v %v",
+			common.BriefHash(block.GetPreviousHash()),
+			common.BriefHash(parentNode.Attributes["block"].(*p2p_pb.BcBlock).GetHash()),
 			found,
 		)
-		_, err := obc.BlockGraph.SetEdge(
-			parentNode.Path,
-			blkNode.Path,
-			dagger.Node{
-				Path: dagger.Path{
-					XType: CONNECTION_TYPE,
-				},
-				Attributes: map[string]interface{}{},
-			})
+		err := obc.connectToChildBlock(parentNode, blkNode)
 		if err != nil {
 			zap.S().Panic(err)
 		}
@@ -99,12 +104,50 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 	}
 	// copying is faster than locking on the outer loop of the DFS
 	obc.Mu.Lock()
-	// first clean up the chain, scan all heads for now-existing
 	heads := make(map[string]bool)
 	for h, v := range obc.Heads {
 		heads[h] = v
 	}
 	obc.Mu.Unlock()
+	// first clean up the chain state, connect heads that may have arrived out of order
+	for h, _ := range heads {
+		headBlock, found := obc.BlockGraph.GetNode(
+			dagger.Path{
+				XID:   h,
+				XType: BLOCK_TYPE,
+			})
+		if !found { // heads must appear in the block graph!
+			zap.S().Panicf("Could not find head block: %v", common.BriefHash(h))
+		}
+		// get the head's parent node if it exists
+		parentNode, found := obc.BlockGraph.GetNode(
+			dagger.Path{
+				XID:   headBlock.Attributes["block"].(*p2p_pb.BcBlock).GetPreviousHash(),
+				XType: BLOCK_TYPE,
+			})
+		if found {
+			zap.S().Debugf(
+				"found previous hash in chain graph for head %v -> %v %v",
+				common.BriefHash(block.GetPreviousHash()),
+				common.BriefHash(parentNode.Attributes["block"].(*p2p_pb.BcBlock).GetHash()),
+				found,
+			)
+			err := obc.connectToChildBlock(parentNode, headBlock)
+			if err != nil {
+				zap.S().Panic(err)
+			}
+			// remove the now-integrated head from the list of heads
+			delete(heads, h)
+		}
+	}
+	// copy the updated heads list back to the lock-protected version
+	obc.Mu.Lock()
+	obc.Heads = make(map[string]bool)
+	for h, v := range heads {
+		obc.Heads[h] = v
+	}
+	obc.Mu.Unlock()
+	// display all heads, mark longest chain, pop to db ingestion if connected and depth > maturity depth
 	for hash, _ := range heads {
 		headNode, found := obc.BlockGraph.GetNode(
 			dagger.Path{
