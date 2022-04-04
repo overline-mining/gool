@@ -1,12 +1,13 @@
-name: deploy gool docker images
+name: deploy lisk docker images
 
 on:
+  workflow_dispatch:
   push:
-    tags:
-    - v*.*.*
+    paths:
+    - 'docker/build-lisk.sh'
 
 jobs:
-  gool:
+  lisk:
     runs-on: ubuntu-latest
     steps:
       -
@@ -25,11 +26,9 @@ jobs:
       -
         name: Build and push all targets
         run: |
-          TAG=$(git describe --tags --abbrev=0)
+          TAG=$(grep 'LISK_VERSION=' docker/build-lisk.sh | head -1 | tr '=' '\n' | tail -1 | awk '{ print substr($0, 2, length($0)-2) }')
           BUILD=$(git rev-parse --short HEAD)
           VERSION=${TAG}-g${BUILD}
 
-          PLATFORMS=linux/amd64,linux/arm/v7,linux/arm64,linux/ppc64le,linux/s390x,linux/386,linux/arm/v5,linux/mips64le,linux/riscv64
-
-          docker buildx build --progress plain --platform ${PLATFORMS} --tag ${{ secrets.DOCKERHUB_ACCOUNT }}/gool:${VERSION} -f docker/Dockerfile.gool . --push
-          docker buildx build --progress plain --platform ${PLATFORMS} --tag ${{ secrets.DOCKERHUB_ACCOUNT }}/gool:latest -f docker/Dockerfile.gool . --push
+          docker/build-lisk.sh linux/amd64,linux/arm/v7,linux/arm64 ${{ secrets.DOCKERHUB_ACCOUNT }} ${VERSION} --push
+          docker/build-lisk.sh linux/amd64,linux/arm/v7,linux/arm64 ${{ secrets.DOCKERHUB_ACCOUNT }} latest --push
