@@ -1,0 +1,36 @@
+name: deploy bitcoind docker image
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+    - 'docker/Dockerfile.bitcoin-core'
+
+jobs:
+  bitcoind:
+    runs-on: ubuntu-latest
+    steps:
+      -
+        name: Checkout
+        uses: actions/checkout@v2
+      -
+        name: Set up QEMU
+        uses: docker/setup-qemu-action@v1
+      -
+        name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v1
+      -
+        name: Log into registry
+        run: echo "${{ secrets.DOCKERHUB_ACCESS_TOKEN }}" | docker login -u ${{ secrets.DOCKERHUB_ACCOUNT }} --password-stdin
+      -
+        name: Build and push all targets
+        run: |
+          TAG=$(grep 'ARG BTCD_VERSION' docker/Dockerfile.bitcoin-core | tr '=' '\n' | tail -1)
+          BUILD=$(git rev-parse --short HEAD)
+          VERSION=v${TAG}-g${BUILD}
+
+          PLATFORMS=linux/amd64,linux/arm/v7,linux/arm64,linux/ppc64le,linux/riscv64
+
+          docker buildx build --platform $PLATFORMS --tag ${{ secrets.DOCKERHUB_ACCOUNT }}/bitcoin-core:${VERSION} -f docker/Dockerfile.bitcoin-core . --push
+          docker buildx build --platform $PLATFORMS --tag ${{ secrets.DOCKERHUB_ACCOUNT }}/bitcoin-core:latest -f docker/Dockerfile.bitcoin-core . --push

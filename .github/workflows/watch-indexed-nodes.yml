@@ -1,4 +1,4 @@
-name: Check for new versions of child chains
+name: Check for new versions of indexed chains
 
 on:
   workflow_dispatch:
@@ -43,6 +43,6 @@ jobs:
           title: "Update child-node versions"
           reviewers: "lgray"
           author: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
-          branch: "bot-upgrade-child-nodes"
+          branch: "bot-upgrade-indexed-nodes"
           body: |
             Updates to BTC, ETH, NEO, WAV, or LSK has been found.
