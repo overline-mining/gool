@@ -43,9 +43,7 @@ import (
 	"github.com/autom8ter/dagger"
 	db "github.com/overline-mining/gool/src/database"
 	"github.com/overline-mining/gool/src/validation"
-	lz4 "github.com/pierrec/lz4/v4"
 	probar "github.com/schollz/progressbar/v3"
-	bolt "go.etcd.io/bbolt"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -305,9 +303,12 @@ func main() {
 			os.Exit(1)
 		}
 		err = gooldb.AddBlock(gblock)
-	} else {
-		startingHeight = gooldb.SerializedHeight()
 	}
+	startingHeight = gooldb.SerializedHeight()
+	if startingHeight == 0 {
+		startingHeight = gooldb.HighestBlockHeight()
+	}
+
 	defer gooldb.Close()
 
 	checkError(err)
@@ -517,6 +518,7 @@ func main() {
 					case messages.DATA:
 						blocks := p2p_pb.BcBlocks{}
 						err = proto.Unmarshal(oneMessage.Value, &blocks)
+						zap.S().Debugf("Got blocklist with starting value: %v %v", blocks.Blocks[0].GetHeight(), blocks.Blocks[0].GetHash())
 						if gooldb.IsInitialBlockDownload() {
 							goodBlocks := p2p_pb.BcBlocks{}
 							ibdWorkList.Mu.Lock()
@@ -532,9 +534,9 @@ func main() {
 						}
 						if err == nil {
 							if goolChain.IsFollowingChain() {
-								for _, block := range blocks.Blocks {
-									goolChain.AddBlock(block)
-								}
+								zap.S().Debug("before goolChain->AddBlocks")
+								goolChain.AddBlockRange(&blocks)
+								zap.S().Debug("after goolChain->AddBlocks")
 							} else if gooldb.IsInitialBlockDownload() {
 								gooldb.AddBlockRange(&blocks)
 							}
@@ -555,7 +557,7 @@ func main() {
 							olHandlerMapMu.Unlock()
 							zap.S().Debugf("Received Valid BLOCK: Set Height of %v to %v", peerIDHex, b.GetHeight())
 							if goolChain.IsFollowingChain() {
-								goolChain.AddBlock(b)
+								//goolChain.AddBlock(b)
 							}
 							if gooldb.IsInitialBlockDownload() {
 								height_i64 := int64(b.GetHeight())
@@ -587,75 +589,74 @@ func main() {
 			}
 		}
 	}()
-	/*
-		go func() {
-			blockStride := uint64(10)
-			iStride := uint64(0)
-			topRange := uint64(startingHeight + (iStride+1)*blockStride + 1)
-			for {
-				if !gooldb.IsInitialBlockDownload() {
-					break
-				}
-				olHandlerMapMu.Lock()
-				for peer, messageHandler := range olMessageHandlers {
-					olMessageMu.Lock()
-					if messageHandler.Peer.Height == 0 || messageHandler.Peer.Height < topRange {
-						olMessageMu.Unlock()
-						continue
-					}
-					low, high := uint64(iStride*blockStride), uint64((iStride+1)*blockStride)
-					low += startingHeight + 1
-					high += startingHeight + 1
-					if high > messageHandler.Peer.Height {
-						high = messageHandler.Peer.Height
-					}
-					ibdWorkList.Mu.Lock()
-					for i := low; i < high; i++ {
-						ibdWorkList.AllowedBlocks[i] = low
-					}
-					ibdWorkList.Mu.Unlock()
-					reqstr := messages.GET_DATA + messages.SEPARATOR + fmt.Sprintf("%d%s%d", low, messages.SEPARATOR, high)
-					reqLen := len(reqstr)
-					request := make([]byte, reqLen+4)
-					binary.BigEndian.PutUint32(request[0:], uint32(reqLen))
-					copy(request[4:], []byte(reqstr))
-
-					zap.S().Debugf("Sending request: %v -> %v", peer, reqstr)
-
-					// write the request to the connection
-					n, err := messageHandler.Peer.Conn.Write(request)
-					//zap.S().Debugf("Wrote %v bytes to the outbound connection!", n)
-					if n != len(request) {
-						zap.S().Fatal("Fatal error: didn't write complete request to outbound connection!")
-						os.Exit(1)
-					}
-					checkError(err)
+	go func() {
+		blockStride := uint64(10)
+		iStride := uint64(0)
+		topRange := uint64(startingHeight + (iStride+1)*blockStride + 1)
+		for {
+			if !gooldb.IsInitialBlockDownload() {
+				break
+			}
+			olHandlerMapMu.Lock()
+			for peer, messageHandler := range olMessageHandlers {
+				olMessageMu.Lock()
+				low, high := uint64(iStride*blockStride), uint64((iStride+1)*blockStride)
+				low += startingHeight + 1
+				high += startingHeight + 1
+				if messageHandler.Peer.Height == 0 || messageHandler.Peer.Height < low || messageHandler.Peer.Height < topRange {
 					olMessageMu.Unlock()
+					continue
+				}
+				if high > messageHandler.Peer.Height {
+					high = messageHandler.Peer.Height
+				}
+				ibdWorkList.Mu.Lock()
+				for i := low; i < high; i++ {
+					ibdWorkList.AllowedBlocks[i] = low
+				}
+				ibdWorkList.Mu.Unlock()
+				reqstr := messages.GET_DATA + messages.SEPARATOR + fmt.Sprintf("%d%s%d", low, messages.SEPARATOR, high)
+				reqLen := len(reqstr)
+				request := make([]byte, reqLen+4)
+				binary.BigEndian.PutUint32(request[0:], uint32(reqLen))
+				copy(request[4:], []byte(reqstr))
 
-					iStride += 1
-					if iStride%100 == 0 { // if we've submitted a request for 1000 blocks - wait until we have received them all
-						zap.S().Debugf("Submitted block requests for range [%v,%v]", startingHeight+(iStride-100)*blockStride, startingHeight+iStride*blockStride)
-						for {
-							ibdWorkList.Mu.Lock()
-							nBlocksRemaining := len(ibdWorkList.AllowedBlocks)
-							ibdWorkList.Mu.Unlock()
-							if nBlocksRemaining == 0 {
-								break
-							} else {
-								zap.S().Debugf("waiting for %v blocks to arrive...", nBlocksRemaining)
-								time.Sleep(time.Millisecond * 500)
-							}
+				zap.S().Debugf("Sending request: %v -> %v", peer, reqstr)
+
+				// write the request to the connection
+				n, err := messageHandler.Peer.Conn.Write(request)
+				//zap.S().Debugf("Wrote %v bytes to the outbound connection!", n)
+				if n != len(request) {
+					zap.S().Fatal("Fatal error: didn't write complete request to outbound connection!")
+					os.Exit(1)
+				}
+				checkError(err)
+				olMessageMu.Unlock()
+
+				iStride += 1
+				if iStride%100 == 0 { // if we've submitted a request for 1000 blocks - wait until we have received them all
+					zap.S().Debugf("Submitted block requests for range [%v,%v]", startingHeight+(iStride-100)*blockStride, startingHeight+iStride*blockStride)
+					for {
+						ibdWorkList.Mu.Lock()
+						nBlocksRemaining := len(ibdWorkList.AllowedBlocks)
+						ibdWorkList.Mu.Unlock()
+						if nBlocksRemaining == 0 {
+							break
+						} else {
+							zap.S().Debugf("waiting for %v blocks to arrive...", nBlocksRemaining)
+							time.Sleep(time.Millisecond * 500)
 						}
 					}
-
-					topRange = uint64(startingHeight + (iStride+1)*blockStride + 1)
 				}
-				olHandlerMapMu.Unlock()
-				time.Sleep(time.Millisecond * 250)
+
+				topRange = uint64(startingHeight + (iStride+1)*blockStride + 1)
 			}
-			zap.L().Info("Initial block download has completed.")
-		}()
-	*/
+			olHandlerMapMu.Unlock()
+			time.Sleep(time.Millisecond * 250)
+		}
+		zap.L().Info("Initial block download has completed.")
+	}()
+
 	defer func() {
 		olHandlerMapMu.Lock()
 		for _, handler := range olMessageHandlers {
@@ -728,84 +729,6 @@ func handshake_peer(conn net.Conn, id []byte, buf *[0xa00000]byte) ([]byte, int,
 	copy(buf[0:], buf[cursor:ntot])
 
 	return peerHandshake[1:lenPeer], int(ntot - int(cursor)), nil
-}
-
-func SerializeBlocks(db *bolt.DB, blocks p2p_pb.BcBlocks) error {
-	c := &lz4.CompressorHC{}
-	blocksBytes, err := proto.Marshal(&blocks)
-	compressionBuf := make([]byte, len(blocksBytes))
-	checkError(err)
-	zap.S().Infof("Blocklist: is %v bytes long, consisting of %v blocks", len(blocksBytes), len(blocks.Blocks))
-	nCompressed, err := c.CompressBlock(blocksBytes, compressionBuf)
-	checkError(err)
-	zap.S().Infof("Blocklist: compressed to %v bytes!", nCompressed)
-
-	return db.Batch(func(tx *bolt.Tx) error {
-		// block chunks keyed by the first hash in the chunk
-		chunks, err := tx.CreateBucketIfNotExists([]byte("OVERLINE-BLOCK-CHUNKS"))
-		if err != nil {
-			return err
-		}
-		// block hashes to chunks that store that block
-		block2chunk, err := tx.CreateBucketIfNotExists([]byte("OVERLINE-BLOCK-CHUNK-MAP"))
-		if err != nil {
-			return err
-		}
-		// block height to block hash
-		height2hash, err := tx.CreateBucketIfNotExists([]byte("OVERLINE-BLOCK-HEIGHT-TO-HASH"))
-		if err != nil {
-			return err
-		}
-		tx2hash, err := tx.CreateBucketIfNotExists([]byte("OVERLINE-TX-TO-BLOCK"))
-		if err != nil {
-			return err
-		}
-		syncInfo, err := tx.CreateBucketIfNotExists([]byte("SYNC-INFO"))
-		if err != nil {
-			return err
-		}
-
-		// first store the compressed chunk of blocks
-		// everythin else is referencing information
-		chunkHash, _ := hex.DecodeString(blocks.Blocks[0].GetHash())
-		err = chunks.Put(chunkHash, compressionBuf[:nCompressed])
-		if err != nil {
-			return err
-		}
-
-		for _, block := range blocks.Blocks {
-			blockHash, _ := hex.DecodeString(block.GetHash())
-			blockHeight := make([]byte, 8)
-			binary.BigEndian.PutUint64(blockHeight, block.GetHeight())
-
-			// eventually we'll need to figure out the winning
-			// block and only commit that!
-			err = height2hash.Put(blockHeight, blockHash)
-			if err != nil {
-				return err
-			}
-
-			for _, tx := range block.Txs {
-				txHash, _ := hex.DecodeString(tx.GetHash())
-				err = tx2hash.Put(txHash, blockHash)
-				if err != nil {
-					return err
-				}
-			}
-
-			err = block2chunk.Put(blockHash, chunkHash)
-			if err != nil {
-				return err
-			}
-
-			err = syncInfo.Put([]byte("LastWrittenBlockHeight"), blockHeight)
-			err = syncInfo.Put([]byte("LastWrittenBlockHash"), blockHash)
-			if err != nil {
-				return err
-			}
-		}
-		return err
-	})
 }
 
 func getNtp(ctx context.Context) (types.Time, error) {

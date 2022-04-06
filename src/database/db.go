@@ -84,7 +84,7 @@ type OverlineDB struct {
 	ibdMu                sync.Mutex
 	ibdMode              bool              // Initial Block Download mode
 	tipOfSerializedChain *p2p_pb.BcBlock   // the highest, main-chain serialized block
-	highestBlock         *p2p_pb.BcBlock   // the highest block with the most distance
+	highestBlock         *p2p_pb.BcBlock   // the highest block awaiting serialization
 	toSerialize          []*p2p_pb.BcBlock // sorted ascending in block height
 	incomingBlocks       map[string]*p2p_pb.BcBlock
 	txMemPool            map[string]*p2p_pb.Transaction
@@ -105,6 +105,21 @@ func (odb *OverlineDB) Open(filepath string) error {
 	odb.txMu.Unlock()
 
 	err = odb.db.View(func(tx *bolt.Tx) error {
+		syncInfo := tx.Bucket(SyncInfo)
+		if syncInfo != nil {
+			lastWrittenHash := syncInfo.Get([]byte("LastWrittenBlockHash"))
+			odb.tipOfSerializedChain, err = odb.getSerializedBlock(lastWrittenHash)
+			if err != nil {
+				return err
+			}
+			odb.highestBlock = odb.tipOfSerializedChain
+		} else {
+			return errors.New("Blockchain database malformed SYNC-INFO bucket not available!")
+		}
+		return nil
+	})
+
+	err = odb.db.View(func(tx *bolt.Tx) error {
 		blocks := tx.Bucket(ChainstateBlocks)
 		txs := tx.Bucket(ChainstateTxs)
 		mtxs := tx.Bucket(ChainstateMTxs)
@@ -115,14 +130,29 @@ func (odb *OverlineDB) Open(filepath string) error {
 		odb.ibdMode = true
 		odb.ibdMu.Unlock()
 		cblocks := blocks.Cursor()
+		goodBlocks := new(p2p_pb.BcBlocks)
 		for hash, serblock := cblocks.First(); hash != nil; hash, serblock = cblocks.Next() {
-			strhash := hex.EncodeToString(hash)
 			block := new(p2p_pb.BcBlock)
 			err := proto.Unmarshal(serblock, block)
 			isValid, _ := validation.IsValidBlock(block)
 			if err == nil && isValid {
-				odb.incomingBlocks[strhash] = block
+				goodBlocks.Blocks = append(goodBlocks.Blocks, block)
 			}
+		}
+		sort.SliceStable(goodBlocks.Blocks, func(i, j int) bool {
+			if goodBlocks.Blocks[i].GetHeight() == goodBlocks.Blocks[j].GetHeight() {
+				iDist, _ := new(big.Int).SetString(goodBlocks.Blocks[i].GetTotalDistance(), 10)
+				jDist, _ := new(big.Int).SetString(goodBlocks.Blocks[j].GetTotalDistance(), 10)
+				compare := iDist.Cmp(jDist)
+				if compare == 0 {
+					return goodBlocks.Blocks[i].GetTimestamp() < goodBlocks.Blocks[j].GetTimestamp()
+				}
+				return compare < 0
+			}
+			return goodBlocks.Blocks[i].GetHeight() < goodBlocks.Blocks[j].GetHeight()
+		})
+		for _, b := range goodBlocks.Blocks {
+			odb.addBlockUnsafe(b)
 		}
 		odb.txMu.Lock()
 		curtx := txs.Cursor()
@@ -152,23 +182,8 @@ func (odb *OverlineDB) Open(filepath string) error {
 		odb.tipOfSerializedChain = nil
 		odb.highestBlock = nil
 	} else {
-		err = odb.db.View(func(tx *bolt.Tx) error {
-			syncInfo := tx.Bucket(SyncInfo)
-			if syncInfo != nil {
-				lastWrittenHash := syncInfo.Get([]byte("LastWrittenBlockHash"))
-				odb.tipOfSerializedChain, err = odb.getSerializedBlock(lastWrittenHash)
-				if err != nil {
-					return err
-				}
-				odb.highestBlock = nil
-			} else {
-				return errors.New("Blockchain database malformed SYNC-INFO bucket not available!")
-			}
-			return nil
-		})
-		if err == nil {
-			zap.S().Infof("Recovered last serialized block: %v -> %v", common.BriefHash(odb.tipOfSerializedChain.GetHash()), odb.tipOfSerializedChain.GetHeight())
-		}
+		zap.S().Infof("Recovered last serialized block    : %v -> %v", common.BriefHash(odb.tipOfSerializedChain.GetHash()), odb.tipOfSerializedChain.GetHeight())
+		zap.S().Infof("Recovered highest contiguous block : %v -> %v", common.BriefHash(odb.highestBlock.GetHash()), odb.highestBlock.GetHeight())
 	}
 
 	if odb.tipOfSerializedChain != nil {
@@ -206,14 +221,18 @@ func (odb *OverlineDB) Close() {
 func (odb *OverlineDB) addBlockUnsafe(block *p2p_pb.BcBlock) {
 	if _, ok := odb.incomingBlocks[block.GetHash()]; !ok {
 		odb.incomingBlocks[block.GetHash()] = block
-		blockDist, _ := new(big.Int).SetString(block.GetTotalDistance(), 10)
-		highestDist, _ := new(big.Int).SetString(odb.highestBlock.GetTotalDistance(), 10)
-		if block.GetPreviousHash() == odb.highestBlock.GetHash() &&
-			block.GetHeight() == odb.highestBlock.GetHeight()+1 {
+		if odb.highestBlock == nil && block.GetHeight() == 1 {
 			odb.highestBlock = block
-		} else if block.GetPreviousHash() == odb.highestBlock.GetPreviousHash() &&
-			blockDist.Cmp(highestDist) > 0 {
-			odb.highestBlock = block
+		} else {
+			blockDist, _ := new(big.Int).SetString(block.GetTotalDistance(), 10)
+			highestDist, _ := new(big.Int).SetString(odb.highestBlock.GetTotalDistance(), 10)
+			if block.GetPreviousHash() == odb.highestBlock.GetHash() &&
+				block.GetHeight() == odb.highestBlock.GetHeight()+1 {
+				odb.highestBlock = block
+			} else if block.GetPreviousHash() == odb.highestBlock.GetPreviousHash() &&
+				blockDist.Cmp(highestDist) > 0 {
+				odb.highestBlock = block
+			}
 		}
 	} else {
 		zap.S().Debugf("Block %v:%v already seen.", block.GetHeight(), common.BriefHash(block.GetHash()))
@@ -242,13 +261,32 @@ func (odb *OverlineDB) IsInitialBlockDownload() bool {
 func (odb *OverlineDB) SerializedHeight() uint64 {
 	odb.mu.Lock()
 	defer odb.mu.Unlock()
-	return odb.tipOfSerializedChain.GetHeight()
+	if odb.tipOfSerializedChain != nil {
+		return odb.tipOfSerializedChain.GetHeight()
+	}
+	return 0
 }
 
 func (odb *OverlineDB) HighestSerializedBlock() p2p_pb.BcBlock {
 	odb.mu.Lock()
 	defer odb.mu.Unlock()
 	block := *odb.tipOfSerializedChain
+	return block
+}
+
+func (odb *OverlineDB) HighestBlockHeight() uint64 {
+	odb.mu.Lock()
+	defer odb.mu.Unlock()
+	if odb.highestBlock != nil {
+		return odb.highestBlock.GetHeight()
+	}
+	return 0
+}
+
+func (odb *OverlineDB) HighestBlock() p2p_pb.BcBlock {
+	odb.mu.Lock()
+	defer odb.mu.Unlock()
+	block := *odb.highestBlock
 	return block
 }
 
@@ -289,6 +327,13 @@ func (odb *OverlineDB) AddMarkedTransaction(mtx *p2p_pb.MarkedTransaction) {
 }
 
 func (odb *OverlineDB) GetBlockByHeight(blockHeight uint64) (*p2p_pb.BcBlock, error) {
+	/*
+			seekBytes := make([]byte, 8)
+		        binary.BigEndian.PutUint64(seekBytes, blockHeight)
+			err := odb.db.View(func(tx *bolt.Tx) error {
+			  height2hash := tx.Bucket(OverlineHeightToHashMap
+			})
+	*/
 	return nil, nil
 }
 
