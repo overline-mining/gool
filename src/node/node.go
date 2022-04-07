@@ -334,9 +334,11 @@ func main() {
 
 	// create the chain ingester
 	goolChain := chain.OverlineBlockchain{
+		Config:                           chain.DefaultOverlineBlockchainConfig(),
 		BlockGraph:                       dagger.NewGraph(),
 		DB:                               &gooldb,
 		Heads:                            make(map[string]bool),
+		HeadsToCheck:                     make(map[string]uint64),
 		IbdTransitionPeriodRelativeDepth: float64(0.005),
 	}
 	goolChain.UnsetFollowingChain()
@@ -688,6 +690,57 @@ func main() {
 			time.Sleep(time.Millisecond * 250)
 		}
 		zap.L().Info("Initial block download has completed.")
+		for {
+			olHandlerMapMu.Lock()
+			localHandlers := make(map[string]OverlineMessageHandler)
+			for peer, messageHandler := range olMessageHandlers {
+				localHandlers[peer] = messageHandler
+			}
+			olHandlerMapMu.Unlock()
+			headsToCheck := make(map[string]uint64)
+			goolChain.CheckupMu.Lock()
+			for hash, height := range goolChain.HeadsToCheck {
+				headsToCheck[hash] = height
+				zap.S().Infof("Going to check history of disjoint block %v @ %v", common.BriefHash(hash), height)
+				delete(goolChain.HeadsToCheck, hash)
+			}
+			goolChain.CheckupMu.Unlock()
+			// send a request to all connected nodes for the 10 previous blocks
+			// to the head height to check
+			for _, headHeight := range headsToCheck {
+				for peer, messageHandler := range localHandlers {
+					olMessageMu.Lock()
+					low, high := headHeight-11, headHeight-1
+					if messageHandler.Peer.Height == 0 || messageHandler.Peer.Height < low || messageHandler.Peer.Height < topRange {
+						olMessageMu.Unlock()
+						continue
+					}
+					if high > messageHandler.Peer.Height {
+						high = messageHandler.Peer.Height
+					}
+					reqstr := messages.GET_DATA + messages.SEPARATOR + fmt.Sprintf("%d%s%d", low, messages.SEPARATOR, high)
+					reqLen := len(reqstr)
+					request := make([]byte, reqLen+4)
+					binary.BigEndian.PutUint32(request[0:], uint32(reqLen))
+					copy(request[4:], []byte(reqstr))
+
+					zap.S().Debugf("Sending request: %v -> %v", peer, reqstr)
+
+					// write the request to the connection
+					n, err := messageHandler.Peer.Conn.Write(request)
+					//zap.S().Debugf("Wrote %v bytes to the outbound connection!", n)
+					if n != len(request) {
+						zap.S().Fatal("Fatal error: didn't write complete request to outbound connection!")
+						os.Exit(1)
+					}
+					checkError(err)
+					olMessageMu.Unlock()
+				}
+			}
+			time.Sleep(time.Millisecond * 1000)
+
+		}
+
 	}()
 
 	defer func() {

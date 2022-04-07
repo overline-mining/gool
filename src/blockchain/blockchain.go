@@ -19,10 +19,23 @@ const (
 	CONNECTION_TYPE = "connects"
 )
 
+type OverlineBlockchainConfig struct {
+	DisjointCheckupDepth int `json:"disjoint_checkup_depth"` // if there is a chain segment not connected to db, how long does it have to be to ask to go look for blocks to try to connect?
+}
+
+func DefaultOverlineBlockchainConfig() OverlineBlockchainConfig {
+	return OverlineBlockchainConfig{
+		DisjointCheckupDepth: 10,
+	}
+}
+
 type OverlineBlockchain struct {
+	Config                           OverlineBlockchainConfig
 	Mu                               sync.Mutex
+	CheckupMu                        sync.Mutex
 	followMu                         sync.Mutex
 	Heads                            map[string]bool
+	HeadsToCheck                     map[string]uint64
 	BlockGraph                       *dagger.Graph
 	DB                               *database.OverlineDB
 	isFollowingChain                 bool
@@ -164,6 +177,8 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 	// if head's chain is longer than maturity and connected to database
 	// pop the head off that chain, update to new head(s)
 	// add the highest popped head to the chain
+	// if the head is longer than the checkup depth and not connected to database
+	// add to checkup list and grab blocks from all to see if it can be sorted out
 	for {
 		poppedHeads := make([]*p2p_pb.BcBlock, 0)
 		for hash, _ := range heads {
@@ -202,7 +217,7 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 					)
 				} else {
 					zap.S().Infof(
-						"(%v): %s -> %s has highest block: (%v): %v and length %v",
+						"      (%v): %s -> %s has highest block: (%v): %v and length %v",
 						headBlock.GetHeight(),
 						common.BriefHash(headBlock.GetHash()),
 						common.BriefHash(headBlock.GetPreviousHash()),
@@ -211,7 +226,8 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 						highestBlock.GetHeight()-headBlock.GetHeight(),
 					)
 				}
-				if highestBlock.GetHeight()-headBlock.GetHeight() > coin.COINBASE_MATURITY && headBlock.GetPreviousHash() == dbBlock.GetHash() {
+				blockDepth := highestBlock.GetHeight() - headBlock.GetHeight()
+				if blockDepth > coin.COINBASE_MATURITY && headBlock.GetPreviousHash() == dbBlock.GetHash() {
 					// make new heads out of children
 					obc.BlockGraph.RangeEdgesFrom(CONNECTION_TYPE, headNode.Path, func(e dagger.Edge) bool {
 						heads[e.To.XID] = true
@@ -220,6 +236,13 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 					obc.BlockGraph.DelNode(headNode.Path)
 					delete(heads, hash)
 					poppedHeads = append(poppedHeads, headBlock)
+				}
+				if (err != nil || headBlock.GetPreviousHash() != dbBlock.GetHash()) && blockDepth > uint64(obc.Config.DisjointCheckupDepth) {
+					obc.CheckupMu.Lock()
+					if _, ok := obc.HeadsToCheck[headBlock.GetHash()]; !ok {
+						obc.HeadsToCheck[headBlock.GetHash()] = headBlock.GetHeight()
+					}
+					obc.CheckupMu.Unlock()
 				}
 			}
 
@@ -232,7 +255,7 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 		}
 		obc.Mu.Unlock()
 
-		//finally stick the best popped head in the database:
+		//finally stick the best popped head in the database, the others perish
 		sort.SliceStable(poppedHeads, func(i, j int) bool {
 			if poppedHeads[i].GetHeight() == poppedHeads[j].GetHeight() {
 				iDist, _ := new(big.Int).SetString(poppedHeads[i].GetTotalDistance(), 10)
