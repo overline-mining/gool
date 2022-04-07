@@ -546,7 +546,6 @@ func main() {
 							ibdWorkList.Mu.Unlock()
 							blocks = goodBlocks
 							ibdBar.Add(len(blocks.Blocks))
-							zap.S().Infof("Highest peer height %v / highest received block %v", highestNonZeroPeerHeight, highestReceivedBlock)
 							if highestNonZeroPeerHeight != 0 && highestNonZeroPeerHeight-10 < highestReceivedBlock {
 								gooldb.UnSetInitialBlockDownload()
 							}

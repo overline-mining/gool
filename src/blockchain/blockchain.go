@@ -82,6 +82,15 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 	if found { // no need to process a block that is already in the graph
 		return
 	}
+	// check if the block is already in the db, if so pass
+	testHashBytes, err := hex.DecodeString(block.GetHash())
+	var testDbBlock *p2p_pb.BcBlock
+	if err == nil {
+		testDbBlock, err = obc.DB.GetBlock(testHashBytes)
+	}
+	if err == nil && testDbBlock.GetHash() == block.GetHash() {
+		return
+	}
 	// create the node in the block graph
 	blkNode := obc.BlockGraph.SetNode(
 		dagger.Path{
@@ -180,6 +189,7 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 	// if the head is longer than the checkup depth and not connected to database
 	// add to checkup list and grab blocks from all to see if it can be sorted out
 	for {
+		poppedHeadsMap := make(map[string]*p2p_pb.BcBlock)
 		poppedHeads := make([]*p2p_pb.BcBlock, 0)
 		for hash, _ := range heads {
 			headNode, found := obc.BlockGraph.GetNode(
@@ -205,7 +215,9 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 				dbBlock, err = obc.DB.GetBlock(hashBytes)
 			}
 			if highestBlock != nil {
+				hasDB := false
 				if err == nil && headBlock.GetPreviousHash() == dbBlock.GetHash() {
+					hasDB = true
 					zap.S().Infof(
 						"DB << (%v): %s -> %s has highest block: (%v): %v and length %v",
 						headBlock.GetHeight(),
@@ -235,9 +247,10 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 					})
 					obc.BlockGraph.DelNode(headNode.Path)
 					delete(heads, hash)
-					poppedHeads = append(poppedHeads, headBlock)
+					poppedHeadsMap[headBlock.GetHash()] = headBlock
 				}
-				if (err != nil || headBlock.GetPreviousHash() != dbBlock.GetHash()) && blockDepth > uint64(obc.Config.DisjointCheckupDepth) {
+				_, poppedParent := poppedHeadsMap[headBlock.GetPreviousHash()]
+				if !(hasDB || poppedParent) && (blockDepth > uint64(obc.Config.DisjointCheckupDepth)) {
 					obc.CheckupMu.Lock()
 					if _, ok := obc.HeadsToCheck[headBlock.GetHash()]; !ok {
 						obc.HeadsToCheck[headBlock.GetHash()] = headBlock.GetHeight()
@@ -247,13 +260,10 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 			}
 
 		}
-		// copy the updated heads list back to the lock-protected version
-		obc.Mu.Lock()
-		obc.Heads = make(map[string]bool)
-		for h, v := range heads {
-			obc.Heads[h] = v
+
+		for _, blk := range poppedHeadsMap {
+			poppedHeads = append(poppedHeads, blk)
 		}
-		obc.Mu.Unlock()
 
 		//finally stick the best popped head in the database, the others perish
 		sort.SliceStable(poppedHeads, func(i, j int) bool {
@@ -268,10 +278,21 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 			}
 			return poppedHeads[i].GetHeight() < poppedHeads[j].GetHeight()
 		})
+
 		if len(poppedHeads) > 0 {
 			zap.S().Infof("Popping block %v %v to the database!", poppedHeads[len(poppedHeads)-1].GetHeight(), common.BriefHash(poppedHeads[len(poppedHeads)-1].GetHash()))
 			obc.DB.AddBlock(poppedHeads[len(poppedHeads)-1])
-		} else {
+		}
+
+		// copy the updated heads list back to the lock-protected version
+		obc.Mu.Lock()
+		obc.Heads = make(map[string]bool)
+		for h, v := range heads {
+			obc.Heads[h] = v
+		}
+		obc.Mu.Unlock()
+
+		if len(poppedHeads) == 0 {
 			break
 		}
 
