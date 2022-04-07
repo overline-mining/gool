@@ -496,11 +496,16 @@ func main() {
 			heightDbl := float64(gooldb.SerializedHeight())
 			thresholdDbl := heightDbl + float64(gooldb.Config.AncientChunkSize)
 			lowestNonZeroPeerHeight := float64(0)
+			highestNonZeroPeerHeight := uint64(0)
 			olHandlerMapMu.Lock()
 			for _, msgHandler := range olMessageHandlers {
-				floatHeight := float64(msgHandler.Peer.Height)
+				peerHeight := msgHandler.Peer.Height
+				floatHeight := float64(peerHeight)
 				if floatHeight > 0 && (floatHeight < lowestNonZeroPeerHeight || lowestNonZeroPeerHeight == float64(0)) {
 					lowestNonZeroPeerHeight = floatHeight
+				}
+				if peerHeight > highestNonZeroPeerHeight {
+					highestNonZeroPeerHeight = peerHeight
 				}
 			}
 			olHandlerMapMu.Unlock()
@@ -522,21 +527,31 @@ func main() {
 						if gooldb.IsInitialBlockDownload() {
 							goodBlocks := p2p_pb.BcBlocks{}
 							ibdWorkList.Mu.Lock()
+							highestReceivedBlock := uint64(0)
 							for _, block := range blocks.Blocks {
-								if _, ok := ibdWorkList.AllowedBlocks[block.GetHeight()]; ok {
+								if nreqs, ok := ibdWorkList.AllowedBlocks[block.GetHeight()]; ok {
+									nreqs -= 1
+									if block.GetHeight() > highestReceivedBlock {
+										highestReceivedBlock = block.GetHeight()
+									}
 									goodBlocks.Blocks = append(goodBlocks.Blocks, block)
-									delete(ibdWorkList.AllowedBlocks, block.GetHeight())
+									ibdWorkList.AllowedBlocks[block.GetHeight()] = nreqs
+									if nreqs == 0 {
+										delete(ibdWorkList.AllowedBlocks, block.GetHeight())
+									}
 								}
 							}
 							ibdWorkList.Mu.Unlock()
 							blocks = goodBlocks
 							ibdBar.Add(len(blocks.Blocks))
+							zap.S().Infof("Highest peer height %v / highest received block %v", highestNonZeroPeerHeight, highestReceivedBlock)
+							if highestNonZeroPeerHeight != 0 && highestNonZeroPeerHeight-10 < highestReceivedBlock {
+								gooldb.UnSetInitialBlockDownload()
+							}
 						}
 						if err == nil {
 							if goolChain.IsFollowingChain() {
-								zap.S().Debug("before goolChain->AddBlocks")
 								goolChain.AddBlockRange(&blocks)
-								zap.S().Debug("after goolChain->AddBlocks")
 							} else if gooldb.IsInitialBlockDownload() {
 								gooldb.AddBlockRange(&blocks)
 							}
@@ -550,14 +565,12 @@ func main() {
 						isValid, err := validation.IsValidBlock(b)
 						if isValid {
 							peerIDHex := hex.EncodeToString(oneMessage.PeerID)
-							olHandlerMapMu.Lock()
 							msgHandler := olMessageHandlers[peerIDHex]
 							msgHandler.Peer.Height = b.GetHeight()
 							olMessageHandlers[peerIDHex] = msgHandler
-							olHandlerMapMu.Unlock()
 							zap.S().Debugf("Received Valid BLOCK: Set Height of %v to %v", peerIDHex, b.GetHeight())
 							if goolChain.IsFollowingChain() {
-								//goolChain.AddBlock(b)
+								goolChain.AddBlock(b)
 							}
 							if gooldb.IsInitialBlockDownload() {
 								height_i64 := int64(b.GetHeight())
@@ -598,7 +611,18 @@ func main() {
 				break
 			}
 			olHandlerMapMu.Lock()
+			localHandlers := make(map[string]OverlineMessageHandler)
 			for peer, messageHandler := range olMessageHandlers {
+				localHandlers[peer] = messageHandler
+			}
+			olHandlerMapMu.Unlock()
+			for _, messageHandler := range localHandlers {
+				high := uint64((iStride+1)*blockStride) + startingHeight + 1
+				if high < messageHandler.Peer.Height && messageHandler.Peer.Height-high <= uint64(gooldb.Config.AncientChunkSize) {
+					gooldb.UnSetMultiplexPeers()
+				}
+			}
+			for peer, messageHandler := range localHandlers {
 				olMessageMu.Lock()
 				low, high := uint64(iStride*blockStride), uint64((iStride+1)*blockStride)
 				low += startingHeight + 1
@@ -612,7 +636,12 @@ func main() {
 				}
 				ibdWorkList.Mu.Lock()
 				for i := low; i < high; i++ {
-					ibdWorkList.AllowedBlocks[i] = low
+					if _, ok := ibdWorkList.AllowedBlocks[i]; ok {
+						nrequests := ibdWorkList.AllowedBlocks[i] + 1
+						ibdWorkList.AllowedBlocks[i] = nrequests
+					} else {
+						ibdWorkList.AllowedBlocks[i] = 1
+					}
 				}
 				ibdWorkList.Mu.Unlock()
 				reqstr := messages.GET_DATA + messages.SEPARATOR + fmt.Sprintf("%d%s%d", low, messages.SEPARATOR, high)
@@ -633,25 +662,29 @@ func main() {
 				checkError(err)
 				olMessageMu.Unlock()
 
-				iStride += 1
-				if iStride%100 == 0 { // if we've submitted a request for 1000 blocks - wait until we have received them all
-					zap.S().Debugf("Submitted block requests for range [%v,%v]", startingHeight+(iStride-100)*blockStride, startingHeight+iStride*blockStride)
-					for {
-						ibdWorkList.Mu.Lock()
-						nBlocksRemaining := len(ibdWorkList.AllowedBlocks)
-						ibdWorkList.Mu.Unlock()
-						if nBlocksRemaining == 0 {
-							break
-						} else {
-							zap.S().Debugf("waiting for %v blocks to arrive...", nBlocksRemaining)
-							time.Sleep(time.Millisecond * 500)
+				if gooldb.IsMultiplexPeers() {
+					iStride += 1
+					if iStride%100 == 0 { // if we've submitted a request for 1000 blocks - wait until we have received them all
+						zap.S().Debugf("Submitted block requests for range [%v,%v]", startingHeight+(iStride-100)*blockStride, startingHeight+iStride*blockStride)
+						for {
+							ibdWorkList.Mu.Lock()
+							nBlocksRemaining := len(ibdWorkList.AllowedBlocks)
+							ibdWorkList.Mu.Unlock()
+							if nBlocksRemaining == 0 {
+								break
+							} else {
+								zap.S().Debugf("waiting for %v blocks to arrive...", nBlocksRemaining)
+								time.Sleep(time.Millisecond * 500)
+							}
 						}
 					}
 				}
 
 				topRange = uint64(startingHeight + (iStride+1)*blockStride + 1)
 			}
-			olHandlerMapMu.Unlock()
+			if !gooldb.IsMultiplexPeers() {
+				iStride += 1
+			}
 			time.Sleep(time.Millisecond * 250)
 		}
 		zap.L().Info("Initial block download has completed.")

@@ -2,13 +2,15 @@ package blockchain
 
 import (
 	"github.com/autom8ter/dagger"
-	//"github.com/overline-mining/gool/src/coin"
+	"github.com/overline-mining/gool/src/coin"
 	"github.com/overline-mining/gool/src/common"
 	"github.com/overline-mining/gool/src/database"
 	//"github.com/overline-mining/gool/src/validation"
 	"encoding/hex"
 	p2p_pb "github.com/overline-mining/gool/src/protos"
 	"go.uber.org/zap"
+	"math/big"
+	"sort"
 	"sync"
 )
 
@@ -59,7 +61,6 @@ func (obc *OverlineBlockchain) connectToChildBlock(from, to dagger.Node) error {
 }
 
 func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
-	zap.S().Info(">>> OverlineBlockchain::AddBlock <<<")
 	_, found := obc.BlockGraph.GetNode(
 		dagger.Path{
 			XID:   block.GetHash(),
@@ -133,6 +134,7 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 				heads[e.To.XID] = true
 				return true
 			})
+			obc.BlockGraph.DelNode(headNode.Path)
 			delete(heads, h)
 			continue
 		}
@@ -158,63 +160,99 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 		}
 	}
 
-	// display all heads, mark longest chain that has connection to database queue, pop to db ingestion if connected and depth > maturity depth
-	//longestConnectedHead := string("")
-	//longestConnectedHeight := uint64(0)
-	for hash, _ := range heads {
-		headNode, found := obc.BlockGraph.GetNode(
-			dagger.Path{
-				XID:   hash,
-				XType: BLOCK_TYPE,
+	// go over all heads
+	// if head's chain is longer than maturity and connected to database
+	// pop the head off that chain, update to new head(s)
+	// add the highest popped head to the chain
+	for {
+		poppedHeads := make([]*p2p_pb.BcBlock, 0)
+		for hash, _ := range heads {
+			headNode, found := obc.BlockGraph.GetNode(
+				dagger.Path{
+					XID:   hash,
+					XType: BLOCK_TYPE,
+				})
+			if !found {
+				zap.S().Panicf("Could not find head node %v", common.BriefHash(hash))
+			}
+			highestBlock := headNode.Attributes["block"].(*p2p_pb.BcBlock)
+			obc.BlockGraph.DFS(CONNECTION_TYPE, headNode.Path, func(node dagger.Node) bool {
+				blk := node.Attributes["block"].(*p2p_pb.BcBlock)
+				if blk.GetHeight() > highestBlock.GetHeight() {
+					highestBlock = blk
+				}
+				return true
 			})
-		if !found {
-			zap.S().Panicf("Could not find head node %v", common.BriefHash(hash))
-		}
-		highestBlock := headNode.Attributes["block"].(*p2p_pb.BcBlock)
-		obc.BlockGraph.DFS(CONNECTION_TYPE, headNode.Path, func(node dagger.Node) bool {
-			blk := node.Attributes["block"].(*p2p_pb.BcBlock)
-			if blk.GetHeight() > highestBlock.GetHeight() {
-				highestBlock = blk
+			headBlock := headNode.Attributes["block"].(*p2p_pb.BcBlock)
+			hashBytes, err := hex.DecodeString(headBlock.GetPreviousHash())
+			var dbBlock *p2p_pb.BcBlock
+			if err == nil {
+				dbBlock, err = obc.DB.GetBlock(hashBytes)
 			}
-			return true
+			if highestBlock != nil {
+				if err == nil && headBlock.GetPreviousHash() == dbBlock.GetHash() {
+					zap.S().Infof(
+						"DB << (%v): %s -> %s has highest block: (%v): %v and length %v",
+						headBlock.GetHeight(),
+						common.BriefHash(headBlock.GetHash()),
+						common.BriefHash(headBlock.GetPreviousHash()),
+						highestBlock.GetHeight(),
+						common.BriefHash(highestBlock.GetHash()),
+						highestBlock.GetHeight()-headBlock.GetHeight(),
+					)
+				} else {
+					zap.S().Infof(
+						"(%v): %s -> %s has highest block: (%v): %v and length %v",
+						headBlock.GetHeight(),
+						common.BriefHash(headBlock.GetHash()),
+						common.BriefHash(headBlock.GetPreviousHash()),
+						highestBlock.GetHeight(),
+						common.BriefHash(highestBlock.GetHash()),
+						highestBlock.GetHeight()-headBlock.GetHeight(),
+					)
+				}
+				if highestBlock.GetHeight()-headBlock.GetHeight() > coin.COINBASE_MATURITY && headBlock.GetPreviousHash() == dbBlock.GetHash() {
+					// make new heads out of children
+					obc.BlockGraph.RangeEdgesFrom(CONNECTION_TYPE, headNode.Path, func(e dagger.Edge) bool {
+						heads[e.To.XID] = true
+						return true
+					})
+					obc.BlockGraph.DelNode(headNode.Path)
+					delete(heads, hash)
+					poppedHeads = append(poppedHeads, headBlock)
+				}
+			}
+
+		}
+		// copy the updated heads list back to the lock-protected version
+		obc.Mu.Lock()
+		obc.Heads = make(map[string]bool)
+		for h, v := range heads {
+			obc.Heads[h] = v
+		}
+		obc.Mu.Unlock()
+
+		//finally stick the best popped head in the database:
+		sort.SliceStable(poppedHeads, func(i, j int) bool {
+			if poppedHeads[i].GetHeight() == poppedHeads[j].GetHeight() {
+				iDist, _ := new(big.Int).SetString(poppedHeads[i].GetTotalDistance(), 10)
+				jDist, _ := new(big.Int).SetString(poppedHeads[j].GetTotalDistance(), 10)
+				compare := iDist.Cmp(jDist)
+				if compare == 0 {
+					return poppedHeads[i].GetTimestamp() < poppedHeads[j].GetTimestamp()
+				}
+				return compare < 0
+			}
+			return poppedHeads[i].GetHeight() < poppedHeads[j].GetHeight()
 		})
-		headBlock := headNode.Attributes["block"].(*p2p_pb.BcBlock)
-		hashBytes, err := hex.DecodeString(headBlock.GetPreviousHash())
-		var dbBlock *p2p_pb.BcBlock
-		if err == nil {
-			dbBlock, err = obc.DB.GetBlock(hashBytes)
+		if len(poppedHeads) > 0 {
+			zap.S().Infof("Popping block %v %v to the database!", poppedHeads[len(poppedHeads)-1].GetHeight(), common.BriefHash(poppedHeads[len(poppedHeads)-1].GetHash()))
+			obc.DB.AddBlock(poppedHeads[len(poppedHeads)-1])
+		} else {
+			break
 		}
-		if highestBlock != nil {
-			if err == nil && headBlock.GetPreviousHash() == dbBlock.GetHash() {
-				zap.S().Infof(
-					"DB << (%v): %s -> %s has highest block: (%v): %v and length %v",
-					headBlock.GetHeight(),
-					common.BriefHash(headBlock.GetHash()),
-					common.BriefHash(headBlock.GetPreviousHash()),
-					highestBlock.GetHeight(),
-					common.BriefHash(highestBlock.GetHash()),
-					highestBlock.GetHeight()-headBlock.GetHeight(),
-				)
-			} else {
-				zap.S().Infof(
-					"(%v): %s -> %s has highest block: (%v): %v and length %v",
-					headBlock.GetHeight(),
-					common.BriefHash(headBlock.GetHash()),
-					common.BriefHash(headBlock.GetPreviousHash()),
-					highestBlock.GetHeight(),
-					common.BriefHash(highestBlock.GetHash()),
-					highestBlock.GetHeight()-headBlock.GetHeight(),
-				)
-			}
-		}
+
 	}
-	// copy the updated heads list back to the lock-protected version
-	obc.Mu.Lock()
-	obc.Heads = make(map[string]bool)
-	for h, v := range heads {
-		obc.Heads[h] = v
-	}
-	obc.Mu.Unlock()
 }
 
 func (obc *OverlineBlockchain) AddBlockRange(blocks *p2p_pb.BcBlocks) {

@@ -83,6 +83,7 @@ type OverlineDB struct {
 	txMu                 sync.Mutex
 	ibdMu                sync.Mutex
 	ibdMode              bool              // Initial Block Download mode
+	multiplexPeers       bool              // when in IBD how to we query blocks from peers (stripe over peers (true) or request the same blocks from each (false))
 	tipOfSerializedChain *p2p_pb.BcBlock   // the highest, main-chain serialized block
 	highestBlock         *p2p_pb.BcBlock   // the highest block awaiting serialization
 	toSerialize          []*p2p_pb.BcBlock // sorted ascending in block height
@@ -200,6 +201,7 @@ func (odb *OverlineDB) Open(filepath string) error {
 	}
 
 	odb.SetInitialBlockDownload()
+	odb.SetMultiplexPeers()
 	odb.mu.Unlock()
 	return err
 }
@@ -237,6 +239,25 @@ func (odb *OverlineDB) addBlockUnsafe(block *p2p_pb.BcBlock) {
 	} else {
 		zap.S().Debugf("Block %v:%v already seen.", block.GetHeight(), common.BriefHash(block.GetHash()))
 	}
+}
+
+func (odb *OverlineDB) SetMultiplexPeers() {
+	odb.ibdMu.Lock()
+	odb.multiplexPeers = true
+	odb.ibdMu.Unlock()
+}
+
+func (odb *OverlineDB) UnSetMultiplexPeers() {
+	odb.ibdMu.Lock()
+	odb.multiplexPeers = false
+	odb.ibdMu.Unlock()
+}
+
+func (odb *OverlineDB) IsMultiplexPeers() bool {
+	odb.ibdMu.Lock()
+	out := odb.multiplexPeers
+	odb.ibdMu.Unlock()
+	return out
 }
 
 func (odb *OverlineDB) SetInitialBlockDownload() {
