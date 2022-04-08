@@ -532,7 +532,9 @@ func main() {
 					case messages.DATA:
 						blocks := p2p_pb.BcBlocks{}
 						err = proto.Unmarshal(oneMessage.Value, &blocks)
-						zap.S().Debugf("Got blocklist with starting value: %v %v", blocks.Blocks[0].GetHeight(), blocks.Blocks[0].GetHash())
+						if err == nil && len(blocks.Blocks) > 0 {
+							zap.S().Debugf("Got blocklist with starting value: %v %v", blocks.Blocks[0].GetHeight(), blocks.Blocks[0].GetHash())
+						}
 						if gooldb.IsInitialBlockDownload() {
 							goodBlocks := p2p_pb.BcBlocks{}
 							ibdWorkList.Mu.Lock()
