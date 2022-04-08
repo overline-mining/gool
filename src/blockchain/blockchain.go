@@ -21,11 +21,13 @@ const (
 
 type OverlineBlockchainConfig struct {
 	DisjointCheckupDepth int `json:"disjoint_checkup_depth"` // if there is a chain segment not connected to db, how long does it have to be to ask to go look for blocks to try to connect?
+	DisplayDepth         int `json:"display_depth"`          // only show chains of this length or longer
 }
 
 func DefaultOverlineBlockchainConfig() OverlineBlockchainConfig {
 	return OverlineBlockchainConfig{
 		DisjointCheckupDepth: 10,
+		DisplayDepth:         10,
 	}
 }
 
@@ -193,6 +195,7 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 	for {
 		poppedHeadsMap := make(map[string]*p2p_pb.BcBlock)
 		poppedHeads := make([]*p2p_pb.BcBlock, 0)
+		zap.S().Infof("There are %v chain heads to follow! Showing chains longer than %v", len(heads), obc.Config.DisplayDepth)
 		for hash, _ := range heads {
 			headNode, found := obc.BlockGraph.GetNode(
 				dagger.Path{
@@ -207,6 +210,17 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 				blk := node.Attributes["block"].(*p2p_pb.BcBlock)
 				if blk.GetHeight() > highestBlock.GetHeight() {
 					highestBlock = blk
+				} else if blk.GetHeight() == blk.GetHeight() {
+					highestDist, _ := new(big.Int).SetString(highestBlock.GetTotalDistance(), 10)
+					blkDist, _ := new(big.Int).SetString(blk.GetTotalDistance(), 10)
+					compare := blkDist.Cmp(highestDist)
+					if compare == 0 {
+						if blk.GetTimestamp() < highestBlock.GetTimestamp() {
+							highestBlock = blk
+						}
+					} else if compare > 0 {
+						highestBlock = blk
+					}
 				}
 				return true
 			})
@@ -218,27 +232,32 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 			}
 			if highestBlock != nil {
 				hasDB := false
+				chainLength := highestBlock.GetHeight() - headBlock.GetHeight()
 				if err == nil && headBlock.GetPreviousHash() == dbBlock.GetHash() {
 					hasDB = true
-					zap.S().Infof(
-						"DB << (%v): %s -> %s has highest block: (%v): %v and length %v",
-						headBlock.GetHeight(),
-						common.BriefHash(headBlock.GetHash()),
-						common.BriefHash(headBlock.GetPreviousHash()),
-						highestBlock.GetHeight(),
-						common.BriefHash(highestBlock.GetHash()),
-						highestBlock.GetHeight()-headBlock.GetHeight(),
-					)
+					if chainLength > uint64(obc.Config.DisplayDepth) {
+						zap.S().Infof(
+							"DB << (%v): %s -> %s has highest block: (%v): %v and length %v",
+							headBlock.GetHeight(),
+							common.BriefHash(headBlock.GetHash()),
+							common.BriefHash(headBlock.GetPreviousHash()),
+							highestBlock.GetHeight(),
+							common.BriefHash(highestBlock.GetHash()),
+							highestBlock.GetHeight()-headBlock.GetHeight(),
+						)
+					}
 				} else {
-					zap.S().Infof(
-						"      (%v): %s -> %s has highest block: (%v): %v and length %v",
-						headBlock.GetHeight(),
-						common.BriefHash(headBlock.GetHash()),
-						common.BriefHash(headBlock.GetPreviousHash()),
-						highestBlock.GetHeight(),
-						common.BriefHash(highestBlock.GetHash()),
-						highestBlock.GetHeight()-headBlock.GetHeight(),
-					)
+					if chainLength > uint64(obc.Config.DisplayDepth) {
+						zap.S().Infof(
+							"      (%v): %s -> %s has highest block: (%v): %v and length %v",
+							headBlock.GetHeight(),
+							common.BriefHash(headBlock.GetHash()),
+							common.BriefHash(headBlock.GetPreviousHash()),
+							highestBlock.GetHeight(),
+							common.BriefHash(highestBlock.GetHash()),
+							highestBlock.GetHeight()-headBlock.GetHeight(),
+						)
+					}
 				}
 				blockDepth := highestBlock.GetHeight() - headBlock.GetHeight()
 				if blockDepth > coin.COINBASE_MATURITY && headBlock.GetPreviousHash() == dbBlock.GetHash() {

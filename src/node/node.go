@@ -499,8 +499,15 @@ func main() {
 			thresholdDbl := heightDbl + float64(gooldb.Config.AncientChunkSize)
 			lowestNonZeroPeerHeight := float64(0)
 			highestNonZeroPeerHeight := uint64(0)
+
+			localHandlers := make(map[string]OverlineMessageHandler)
 			olHandlerMapMu.Lock()
-			for _, msgHandler := range olMessageHandlers {
+			for peer, messageHandler := range olMessageHandlers {
+				localHandlers[peer] = messageHandler
+			}
+			olHandlerMapMu.Unlock()
+
+			for _, msgHandler := range localHandlers {
 				peerHeight := msgHandler.Peer.Height
 				floatHeight := float64(peerHeight)
 				if floatHeight > 0 && (floatHeight < lowestNonZeroPeerHeight || lowestNonZeroPeerHeight == float64(0)) {
@@ -510,7 +517,7 @@ func main() {
 					highestNonZeroPeerHeight = peerHeight
 				}
 			}
-			olHandlerMapMu.Unlock()
+
 			if !goolChain.IsFollowingChain() && lowestNonZeroPeerHeight > 0.0 && lowestNonZeroPeerHeight*(1-goolChain.IbdTransitionPeriodRelativeDepth) < thresholdDbl {
 				goolChain.SetFollowingChain()
 			}
@@ -566,9 +573,11 @@ func main() {
 						isValid, err := validation.IsValidBlock(b)
 						if isValid {
 							peerIDHex := hex.EncodeToString(oneMessage.PeerID)
+							olHandlerMapMu.Lock()
 							msgHandler := olMessageHandlers[peerIDHex]
 							msgHandler.Peer.Height = b.GetHeight()
 							olMessageHandlers[peerIDHex] = msgHandler
+							olHandlerMapMu.Unlock()
 							zap.S().Debugf("Received Valid BLOCK: Set Height of %v to %v", peerIDHex, b.GetHeight())
 							if goolChain.IsFollowingChain() {
 								goolChain.AddBlock(b)
@@ -599,7 +608,7 @@ func main() {
 				olMessageMu.Unlock()
 			} else {
 				olMessageMu.Unlock()
-				time.Sleep(time.Millisecond * 50)
+				time.Sleep(time.Millisecond * 100)
 			}
 		}
 	}()
