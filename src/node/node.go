@@ -511,7 +511,7 @@ func main() {
 				}
 			}
 			olHandlerMapMu.Unlock()
-			if !goolChain.IsFollowingChain() && lowestNonZeroPeerHeight*(1-goolChain.IbdTransitionPeriodRelativeDepth) < thresholdDbl {
+			if !goolChain.IsFollowingChain() && lowestNonZeroPeerHeight > 0.0 && lowestNonZeroPeerHeight*(1-goolChain.IbdTransitionPeriodRelativeDepth) < thresholdDbl {
 				goolChain.SetFollowingChain()
 			}
 			olMessageMu.Lock()

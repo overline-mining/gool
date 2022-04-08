@@ -83,13 +83,15 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 		return
 	}
 	// check if the block is already in the db, if so pass
-	testHashBytes, err := hex.DecodeString(block.GetHash())
-	var testDbBlock *p2p_pb.BcBlock
-	if err == nil {
-		testDbBlock, err = obc.DB.GetBlock(testHashBytes)
-	}
-	if err == nil && testDbBlock.GetHash() == block.GetHash() {
-		return
+	if !obc.DB.IsInitialBlockDownload() {
+		testHashBytes, err := hex.DecodeString(block.GetHash())
+		var testDbBlock *p2p_pb.BcBlock
+		if err == nil {
+			testDbBlock, err = obc.DB.GetBlock(testHashBytes)
+		}
+		if err == nil && testDbBlock.GetHash() == block.GetHash() {
+			return
+		}
 	}
 	// create the node in the block graph
 	blkNode := obc.BlockGraph.SetNode(
@@ -250,7 +252,7 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 					poppedHeadsMap[headBlock.GetHash()] = headBlock
 				}
 				_, poppedParent := poppedHeadsMap[headBlock.GetPreviousHash()]
-				if !(hasDB || poppedParent) && (blockDepth > uint64(obc.Config.DisjointCheckupDepth)) {
+				if !obc.DB.IsInitialBlockDownload() && !(hasDB || poppedParent) && (blockDepth > uint64(obc.Config.DisjointCheckupDepth)) {
 					obc.CheckupMu.Lock()
 					if _, ok := obc.HeadsToCheck[headBlock.GetHash()]; !ok {
 						obc.HeadsToCheck[headBlock.GetHash()] = headBlock.GetHeight()
