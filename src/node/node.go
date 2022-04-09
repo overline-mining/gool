@@ -56,6 +56,7 @@ var (
 	olWorkDir           = flag.String("ol-workdir", ".overline", "Specify the working directory for the node")
 	dbFileName          = flag.String("db-file-name", "overline.boltdb", "The file we're going to write the blockchain to within olWorkDir")
 	validateFullChain   = flag.Bool("full-validation", false, "Run a slow but complete validation of your local blockchain DB")
+	dropChainstate      = flag.Bool("drop-chainstate", false, "Delete the last saved chainstate from the database")
 )
 
 type ConcurrentPeerMap struct {
@@ -291,7 +292,7 @@ func main() {
 	startingHeight := uint64(0)
 	dbFilePath := filepath.Join(*olWorkDir, *dbFileName)
 	gooldb := db.OverlineDB{Config: db.DefaultOverlineDBConfig()}
-	err = gooldb.Open(dbFilePath)
+	err = gooldb.Open(dbFilePath, *dropChainstate)
 
 	if err != nil {
 		startingHeight = 1

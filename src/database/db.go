@@ -93,7 +93,7 @@ type OverlineDB struct {
 	lookupCache          *lru.ARCCache
 }
 
-func (odb *OverlineDB) Open(filepath string) error {
+func (odb *OverlineDB) Open(filepath string, dropChainstate bool) error {
 	var err error
 	odb.db, err = bolt.Open(filepath, 0600, nil)
 	odb.lookupCache, err = lru.NewARC(odb.Config.ActiveSet)
@@ -104,6 +104,37 @@ func (odb *OverlineDB) Open(filepath string) error {
 	odb.txMemPool = make(map[string]*p2p_pb.Transaction)
 	odb.mtxMemPool = make(map[string]*p2p_pb.MarkedTransaction)
 	odb.txMu.Unlock()
+
+	if dropChainstate {
+		err = odb.db.Update(func(tx *bolt.Tx) error {
+			err := tx.DeleteBucket(ChainstateBlocks)
+			if err != nil {
+				zap.S().Error(err)
+			}
+			err = tx.DeleteBucket(ChainstateTxs)
+			if err != nil {
+				zap.S().Error(err)
+			}
+			err = tx.DeleteBucket(ChainstateMTxs)
+			if err != nil {
+				zap.S().Error(err)
+			}
+
+			_, err = tx.CreateBucket(ChainstateBlocks)
+			if err != nil {
+				zap.S().Error(err)
+			}
+			_, err = tx.CreateBucket(ChainstateTxs)
+			if err != nil {
+				zap.S().Error(err)
+			}
+			_, err = tx.CreateBucket(ChainstateMTxs)
+			if err != nil {
+				zap.S().Error(err)
+			}
+			return err
+		})
+	}
 
 	err = odb.db.View(func(tx *bolt.Tx) error {
 		syncInfo := tx.Bucket(SyncInfo)
