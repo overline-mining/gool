@@ -229,3 +229,40 @@ func HeaderRangeIsContiguous(low, high []*p2p_pb.BlockchainHeader) bool {
 	}
 	return (isChained(low, high))
 }
+
+func validateDifficultyProgression(low, high *p2p_pb.BcBlock) bool {
+	if low.GetHeight() < 4 && high.GetHeight() < 4 {
+		return true
+	}
+
+	totalHeightChange := GetNewIndexedHeightChange(low, high)
+
+	if totalHeightChange < 0 {
+		return false
+	}
+
+	return true
+}
+
+func headerHeightDiff(low, high []*p2p_pb.BlockchainHeader) int64 {
+	return int64(high[len(high)-1].GetHeight()) - int64(low[len(low)-1].GetHeight())
+}
+
+func GetNewIndexedHeightChange(low, high *p2p_pb.BcBlock) int64 {
+	nNew := int64(0)
+
+	lowHeaders := low.GetBlockchainHeaders()
+	highHeaders := high.GetBlockchainHeaders()
+
+	nNew += headerHeightDiff(lowHeaders.GetBtc(), highHeaders.GetBtc())
+	nNew += headerHeightDiff(lowHeaders.GetEth(), highHeaders.GetEth())
+	nNew += headerHeightDiff(lowHeaders.GetLsk(), highHeaders.GetLsk())
+	nNew += headerHeightDiff(lowHeaders.GetNeo(), highHeaders.GetNeo())
+	nNew += headerHeightDiff(lowHeaders.GetWav(), highHeaders.GetWav())
+
+	return nNew
+}
+
+func validateDistanceProgression(low, high []*p2p_pb.BcBlock) bool {
+	return true
+}
