@@ -57,6 +57,7 @@ var BIG_MAGICNUMBER3 = new(big.Int).SetInt64(1215500)
 var BIG_MAGICNUMBER4 = new(big.Int).SetInt64(1506600)
 var BIG_MAGICNUMBER5 = new(big.Int).SetInt64(16155)
 var BIG_MAGICNUMBER6 = new(big.Int).SetInt64(16055)
+var BIG_DECAYCONSTANT = new(big.Int).SetInt64(66000000)
 
 // why is all of this in BigInt if they squish it back to a uint64 in js?
 func GetDifficultyPreExp(currentTimestamp, lastBlockTimestamp uint64, lastBlockDiff, minimumDiff *big.Int, nNewBlocks int64, newestHeaderInBlock *p2p_pb.BlockchainHeader) *big.Int {
@@ -218,4 +219,19 @@ func GetDifficultyPreExp(currentTimestamp, lastBlockTimestamp uint64, lastBlockD
 	}
 
 	return result.Set(x)
+}
+
+func GetExpFactorDiff(calcDiff *big.Int, lastBlockHeight uint64) *big.Int {
+	result := new(big.Int).Set(calcDiff)
+	periodCount := new(big.Int).SetUint64(lastBlockHeight)
+	periodCount.Add(periodCount, BIG_ONE)
+	periodCount.Div(periodCount, BIG_DECAYCONSTANT)
+
+	if periodCount.Cmp(BIG_TWO) == 1 {
+		y := new(big.Int).Sub(periodCount, BIG_TWO)
+		y.Exp(y, BIG_TWO, nil)
+		result.Add(result, y)
+	}
+
+	return result
 }
