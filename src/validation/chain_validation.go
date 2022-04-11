@@ -2,8 +2,11 @@ package validation
 
 import (
 	"github.com/overline-mining/gool/src/common"
+	"github.com/overline-mining/gool/src/olhash"
 	p2p_pb "github.com/overline-mining/gool/src/protos"
 	"go.uber.org/zap"
+	"math/big"
+	"sort"
 )
 
 func ValidateBlockRange(startingBlock *p2p_pb.BcBlock, blocks []*p2p_pb.BcBlock) (bool, int) {
@@ -237,15 +240,43 @@ func validateDifficultyProgression(low, high *p2p_pb.BcBlock) bool {
 
 	totalHeightChange := GetNewIndexedHeightChange(low, high)
 
-	if totalHeightChange < 0 {
-		return false
-	}
+	expectedDifficulty, _ := new(big.Int).SetString(high.GetDifficulty(), 10)
+	bigMinDiff := new(big.Int).SetUint64(olhash.MIN_DIFFICULTY)
+	lastBlockDiff, _ := new(big.Int).SetString(low.GetDifficulty(), 10)
 
-	return true
+	newestHeader := GetNewestIndexedBlockHeader(high)
+
+	firstDiff := olhash.GetDifficultyPreExp(
+		high.GetTimestamp(), low.GetTimestamp(),
+		lastBlockDiff, bigMinDiff,
+		totalHeightChange,
+		newestHeader,
+	)
+
+	finalDiff := olhash.GetExpFactorDiff(firstDiff, low.GetHeight())
+
+	return finalDiff.Cmp(expectedDifficulty) == 0
 }
 
 func headerHeightDiff(low, high []*p2p_pb.BlockchainHeader) int64 {
 	return int64(high[len(high)-1].GetHeight()) - int64(low[len(low)-1].GetHeight())
+}
+
+func GetNewestIndexedBlockHeader(block *p2p_pb.BcBlock) *p2p_pb.BlockchainHeader {
+	headers := block.GetBlockchainHeaders()
+
+	headersFlat := make([]*p2p_pb.BlockchainHeader, 0)
+	headersFlat = append(headersFlat, headers.GetBtc()...)
+	headersFlat = append(headersFlat, headers.GetEth()...)
+	headersFlat = append(headersFlat, headers.GetLsk()...)
+	headersFlat = append(headersFlat, headers.GetNeo()...)
+	headersFlat = append(headersFlat, headers.GetWav()...)
+
+	sort.SliceStable(headersFlat, func(i, j int) bool {
+		return headersFlat[i].GetTimestamp() < headersFlat[j].GetTimestamp()
+	})
+
+	return headersFlat[len(headersFlat)-1]
 }
 
 func GetNewIndexedHeightChange(low, high *p2p_pb.BcBlock) int64 {
@@ -263,6 +294,6 @@ func GetNewIndexedHeightChange(low, high *p2p_pb.BcBlock) int64 {
 	return nNew
 }
 
-func validateDistanceProgression(low, high []*p2p_pb.BcBlock) bool {
+func validateDistanceProgression(low, high *p2p_pb.BcBlock) bool {
 	return true
 }
