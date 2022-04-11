@@ -12,11 +12,15 @@ import (
 func ValidateBlockRange(startingBlock *p2p_pb.BcBlock, blocks []*p2p_pb.BcBlock) (bool, int) {
 	n := len(blocks)
 	for i := n - 1; i > 0; i-- {
-		if !OrderedBlockPairIsValid(blocks[i-1], blocks[i]) {
+		if !(OrderedBlockPairIsValid(blocks[i-1], blocks[i]) &&
+			validateDifficultyProgression(blocks[i-1], blocks[i]) &&
+			validateDistanceProgression(blocks[i-1], blocks[i])) {
 			return false, i
 		}
 	}
-	if !OrderedBlockPairIsValid(startingBlock, blocks[0]) {
+	if !(OrderedBlockPairIsValid(startingBlock, blocks[0]) &&
+		validateDifficultyProgression(startingBlock, blocks[0]) &&
+		validateDistanceProgression(startingBlock, blocks[0])) {
 		return false, 0
 	}
 	return true, -1
@@ -295,5 +299,32 @@ func GetNewIndexedHeightChange(low, high *p2p_pb.BcBlock) int64 {
 }
 
 func validateDistanceProgression(low, high *p2p_pb.BcBlock) bool {
-	return true
+	const (
+		PASS_HEIGHT1 = uint64(2469110)
+		PASS_HEIGHT2 = uint64(2499000)
+		PASS_HEIGHT3 = uint64(5000000)
+	)
+
+	expectedDistance, _ := new(big.Int).SetString(high.GetTotalDistance(), 10)
+	lowDistance, _ := new(big.Int).SetString(low.GetTotalDistance(), 10)
+	addedDistance, _ := new(big.Int).SetString(low.GetDistance(), 10)
+	calcDistance := new(big.Int).Add(lowDistance, addedDistance)
+
+	matched := (expectedDistance.Cmp(calcDistance) == 0)
+
+	if !matched {
+		if (high.GetHeight() > PASS_HEIGHT1) && (high.GetHeight() < PASS_HEIGHT2) {
+			return true
+		}
+		// miner did not calculate advantage correctly
+		directDist := new(big.Int).Sub(expectedDistance, lowDistance)
+		if directDist.Cmp(addedDistance) == -1 {
+			return true
+		}
+		if expectedDistance.Cmp(lowDistance) == 1 && high.GetHeight() < PASS_HEIGHT3 {
+			return true
+		}
+	}
+
+	return matched
 }
