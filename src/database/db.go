@@ -28,6 +28,7 @@ var ChainstateMTxs = []byte("CHAINSTATE-MTXS")
 var OverlineBlockChunks = []byte("OVERLINE-BLOCK-CHUNKS")
 var OverlineBlockChunkMap = []byte("OVERLINE-BLOCK-CHUNK-MAP")
 var OverlineHeightToHashMap = []byte("OVERLINE-BLOCK-HEIGHT-TO-HASH")
+var OverlineTxToHashMap = []byte("OVERLINE-TX-TO-BLOCK")
 var SyncInfo = []byte("SYNC-INFO")
 
 type OverlineDBConfig struct {
@@ -93,7 +94,7 @@ type OverlineDB struct {
 	lookupCache          *lru.ARCCache
 }
 
-func (odb *OverlineDB) Open(filepath string, dropChainstate bool) error {
+func (odb *OverlineDB) Open(filepath string, dropChainstate bool, pruneDatabaseTo uint64) error {
 	var err error
 	odb.db, err = bolt.Open(filepath, 0600, nil)
 	odb.lookupCache, err = lru.NewARC(odb.Config.ActiveSet)
@@ -134,6 +135,10 @@ func (odb *OverlineDB) Open(filepath string, dropChainstate bool) error {
 			}
 			return err
 		})
+	}
+
+	if pruneDatabaseTo > 0 {
+		odb.deleteBlocksAfter(pruneDatabaseTo)
 	}
 
 	err = odb.db.View(func(tx *bolt.Tx) error {
@@ -741,4 +746,98 @@ func (odb *OverlineDB) serializeBlocks(inblocks []*p2p_pb.BcBlock) error {
 		}
 		return err
 	})
+}
+
+func (odb *OverlineDB) deleteBlocksAfter(pruneChainTo uint64) error {
+	for hash, block := range odb.incomingBlocks {
+		if block.GetHeight() > pruneChainTo {
+			delete(odb.incomingBlocks, hash)
+		}
+	}
+
+	err := odb.db.Update(func(tx *bolt.Tx) error {
+		blockChunks := tx.Bucket(OverlineBlockChunks)
+		hash2chunk := tx.Bucket(OverlineBlockChunkMap)
+		height2hash := tx.Bucket(OverlineHeightToHashMap)
+		tx2Hash := tx.Bucket(OverlineTxToHashMap)
+		syncInfo := tx.Bucket(SyncInfo)
+
+		seekBytes := make([]byte, 8)
+		binary.BigEndian.PutUint64(seekBytes, pruneChainTo)
+
+		currentChunk := make([]byte, 32)
+		cHeights := height2hash.Cursor()
+
+		// move whatever part of the chunk is below the specified height
+		// back into the chainstate
+		empty := make([]byte, 32)
+		blockMap := make(map[string]*p2p_pb.BcBlock)
+		heightKeysToDelete := make([][]byte, 0, 1000)
+		for heightBytes, hashBytes := cHeights.Seek(seekBytes); heightBytes != nil; heightBytes, hashBytes = cHeights.Next() {
+			chunkHash := hash2chunk.Get(hashBytes)
+			decompressBlocks := false
+			if bytes.Compare(currentChunk, empty) == 0 {
+				// the current chunk starts out empty
+				copy(currentChunk, chunkHash)
+				decompressBlocks = true
+			} else if bytes.Compare(currentChunk, chunkHash) != 0 {
+				// we are done with the previous chunk and can delete it
+				blockChunks.Delete(currentChunk)
+				copy(currentChunk, chunkHash)
+				decompressBlocks = true
+			}
+			// fill the block list if we need to
+			if decompressBlocks {
+				blockMap = make(map[string]*p2p_pb.BcBlock)
+				chunk := blockChunks.Get(currentChunk)
+				decompressionBuf := make([]byte, 10*len(chunk))
+				nDecompressed, err := lz4.UncompressBlock(chunk, decompressionBuf)
+				blocks := new(p2p_pb.BcBlocks)
+				err = proto.Unmarshal(decompressionBuf[:nDecompressed], blocks)
+				if err != nil {
+					return err
+				}
+				for _, block := range blocks.Blocks {
+					heightThisBlock := block.GetHeight()
+					blockHeightBytes := make([]byte, 8)
+					binary.BigEndian.PutUint64(blockHeightBytes, heightThisBlock)
+					heightKeysToDelete = append(heightKeysToDelete, blockHeightBytes)
+					blockMap[block.GetHash()] = block
+				}
+			}
+			// if <= pruneChainTo put in incomingBlocks, delete from serialization map, delete all txs refs
+			hashStr := hex.EncodeToString(hashBytes)
+			block := blockMap[hashStr]
+			if block.GetHeight() <= pruneChainTo {
+				odb.incomingBlocks[hashStr] = block
+			}
+			for _, tx := range block.Txs {
+				txHash, _ := hex.DecodeString(tx.GetHash())
+				err := tx2Hash.Delete(txHash)
+				if err != nil {
+					return err
+				}
+			}
+			hash2chunk.Delete(hashBytes)
+			delete(blockMap, hashStr)
+		}
+		// reset sync data
+		lastBlockHeight := binary.BigEndian.Uint64(heightKeysToDelete[0]) - 1
+		lastBlockHeightBytes := make([]byte, 8)
+		binary.BigEndian.PutUint64(lastBlockHeightBytes, lastBlockHeight)
+		err := syncInfo.Put([]byte("LastWrittenBlockHeight"), lastBlockHeightBytes)
+		if err != nil {
+			return err
+		}
+		err = syncInfo.Put([]byte("LastWrittenBlockHash"), height2hash.Get(lastBlockHeightBytes))
+		if err != nil {
+			return err
+		}
+		// remove all touched heights from serialization index
+		for _, heightKey := range heightKeysToDelete {
+			height2hash.Delete(heightKey)
+		}
+		return nil
+	})
+	return err
 }

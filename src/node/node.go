@@ -57,6 +57,7 @@ var (
 	dbFileName          = flag.String("db-file-name", "overline.boltdb", "The file we're going to write the blockchain to within olWorkDir")
 	validateFullChain   = flag.Bool("full-validation", false, "Run a slow but complete validation of your local blockchain DB")
 	dropChainstate      = flag.Bool("drop-chainstate", false, "Delete the last saved chainstate from the database")
+	pruneDatabaseTo     = flag.Int("prune-database-to", 0, "Before starting the node, remove all blocks after this height.")
 )
 
 type ConcurrentPeerMap struct {
@@ -292,7 +293,11 @@ func main() {
 	startingHeight := uint64(0)
 	dbFilePath := filepath.Join(*olWorkDir, *dbFileName)
 	gooldb := db.OverlineDB{Config: db.DefaultOverlineDBConfig()}
-	err = gooldb.Open(dbFilePath, *dropChainstate)
+	pruneToHeight := uint64(0)
+	if *pruneDatabaseTo > 0 {
+		pruneToHeight = uint64(*pruneDatabaseTo)
+	}
+	err = gooldb.Open(dbFilePath, *dropChainstate, pruneToHeight)
 
 	if err != nil {
 		startingHeight = 1
@@ -305,6 +310,7 @@ func main() {
 		}
 		err = gooldb.AddBlock(gblock)
 	}
+
 	startingHeight = gooldb.SerializedHeight()
 	if startingHeight == 0 {
 		startingHeight = gooldb.HighestBlockHeight()
