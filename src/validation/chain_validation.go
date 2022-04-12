@@ -132,8 +132,8 @@ func wavContiguityProblems(low, high *p2p_pb.BcBlock) bool {
 
 func OrderedBlockPairIsValid(low, high *p2p_pb.BcBlock) bool {
 	return (orderedBlockPairIsValid(low, high, false) &&
-		validateDifficultyProgression(low, high) &&
-		validateDistanceProgression(low, high))
+		(validateDifficultyProgression(low, high) || true) &&
+		(validateDistanceProgression(low, high) || true))
 }
 
 func OrderedBlockPairIsValidStrict(low, high *p2p_pb.BcBlock) bool {
@@ -261,11 +261,14 @@ func validateDifficultyProgression(low, high *p2p_pb.BcBlock) bool {
 
 	result := finalDiff.Cmp(expectedDifficulty) == 0
 
-	if !result && high.GetHeight() >= uint64(5000000) {
-		zap.S().Warnf("%v -> expectedDifficulty: %v, calculatedDifficulty: %v", high.GetHeight(), high.GetDifficulty(), finalDiff.String())
+	if !result {
+		zap.S().Debugf("%v -> expectedDifficulty: %v, calculatedDifficulty: %v", high.GetHeight(), high.GetDifficulty(), finalDiff.String())
 	}
 
-	return true // result || high.GetHeight() < uint64(5000000)
+	// note	that the original js code does not require this	to be
+	// true	since it tests that a pointer to an object is not null
+	// rather than the value of the	object
+	return result
 }
 
 func headerHeightDiff(low, high []*p2p_pb.BlockchainHeader) int64 {
@@ -306,14 +309,26 @@ func GetNewIndexedHeightChange(low, high *p2p_pb.BcBlock) int64 {
 
 func validateDistanceProgression(low, high *p2p_pb.BcBlock) bool {
 	const (
-		PASS_HEIGHT1 = uint64(2469110)
-		PASS_HEIGHT2 = uint64(2499000)
-		PASS_HEIGHT3 = uint64(5000000)
+		PASS_HASH1     = "ce9f9e8b316de889a76d5d70295cedaf8f0894992ee485d5ecf04fea56b2ca62"
+		PASS_HASH2     = "a6eb1f0605ac811a148a9cd864baabe80267765829fad9aca048b9b8ef7f2ab3"
+		SOFT_HEIGHT    = uint64(40000)
+		SOFT_TIMESTAMP = uint64(1584771657)
+		PASS_HEIGHT1   = uint64(2469110)
+		PASS_HEIGHT2   = uint64(2499000)
+		PASS_HEIGHT3   = uint64(5000000)
 	)
+
+	if high.GetHeight() < SOFT_HEIGHT && high.GetTimestamp() < SOFT_TIMESTAMP {
+		return true
+	}
+
+	if high.GetHash() == PASS_HASH1 || high.GetHash() == PASS_HASH2 {
+		return true
+	}
 
 	expectedDistance, _ := new(big.Int).SetString(high.GetTotalDistance(), 10)
 	lowDistance, _ := new(big.Int).SetString(low.GetTotalDistance(), 10)
-	addedDistance, _ := new(big.Int).SetString(low.GetDistance(), 10)
+	addedDistance, _ := new(big.Int).SetString(high.GetDistance(), 10)
 	calcDistance := new(big.Int).Add(lowDistance, addedDistance)
 
 	matched := (expectedDistance.Cmp(calcDistance) == 0)
@@ -324,7 +339,7 @@ func validateDistanceProgression(low, high *p2p_pb.BcBlock) bool {
 		}
 		// miner did not calculate advantage correctly
 		directDist := new(big.Int).Sub(expectedDistance, lowDistance)
-		if directDist.Cmp(expectedDistance) == -1 {
+		if directDist.Cmp(addedDistance) == -1 {
 			return true
 		}
 		if expectedDistance.Cmp(lowDistance) == 1 && high.GetHeight() < PASS_HEIGHT3 {
@@ -332,5 +347,12 @@ func validateDistanceProgression(low, high *p2p_pb.BcBlock) bool {
 		}
 	}
 
+	if !matched {
+		zap.S().Debugf("%v -> %v, %v != %v", low.GetHeight(), high.GetHeight(), expectedDistance.String(), calcDistance.String())
+	}
+
+	// note that the original js code does not require this to be
+	// true since it tests that a pointer to an object is not null
+	// rather than the value of the object
 	return matched
 }
