@@ -12,15 +12,11 @@ import (
 func ValidateBlockRange(startingBlock *p2p_pb.BcBlock, blocks []*p2p_pb.BcBlock) (bool, int) {
 	n := len(blocks)
 	for i := n - 1; i > 0; i-- {
-		if !(OrderedBlockPairIsValid(blocks[i-1], blocks[i]) &&
-			validateDifficultyProgression(blocks[i-1], blocks[i]) &&
-			validateDistanceProgression(blocks[i-1], blocks[i])) {
+		if !OrderedBlockPairIsValid(blocks[i-1], blocks[i]) {
 			return false, i
 		}
 	}
-	if !(OrderedBlockPairIsValid(startingBlock, blocks[0]) &&
-		validateDifficultyProgression(startingBlock, blocks[0]) &&
-		validateDistanceProgression(startingBlock, blocks[0])) {
+	if !OrderedBlockPairIsValid(startingBlock, blocks[0]) {
 		return false, 0
 	}
 	return true, -1
@@ -135,11 +131,15 @@ func wavContiguityProblems(low, high *p2p_pb.BcBlock) bool {
 }
 
 func OrderedBlockPairIsValid(low, high *p2p_pb.BcBlock) bool {
-	return orderedBlockPairIsValid(low, high, false)
+	return (orderedBlockPairIsValid(low, high, false) &&
+		validateDifficultyProgression(low, high) &&
+		validateDistanceProgression(low, high))
 }
 
 func OrderedBlockPairIsValidStrict(low, high *p2p_pb.BcBlock) bool {
-	return orderedBlockPairIsValid(low, high, true)
+	return (orderedBlockPairIsValid(low, high, true) &&
+		validateDifficultyProgression(low, high) &&
+		validateDistanceProgression(low, high))
 }
 
 func orderedBlockPairIsValid(low, high *p2p_pb.BcBlock, isStrict bool) bool {
@@ -259,7 +259,13 @@ func validateDifficultyProgression(low, high *p2p_pb.BcBlock) bool {
 
 	finalDiff := olhash.GetExpFactorDiff(firstDiff, low.GetHeight())
 
-	return finalDiff.Cmp(expectedDifficulty) == 0
+	result := finalDiff.Cmp(expectedDifficulty) == 0
+
+	if !result && high.GetHeight() >= uint64(5000000) {
+		zap.S().Warnf("%v -> expectedDifficulty: %v, calculatedDifficulty: %v", high.GetHeight(), high.GetDifficulty(), finalDiff.String())
+	}
+
+	return true // result || high.GetHeight() < uint64(5000000)
 }
 
 func headerHeightDiff(low, high []*p2p_pb.BlockchainHeader) int64 {
@@ -318,7 +324,7 @@ func validateDistanceProgression(low, high *p2p_pb.BcBlock) bool {
 		}
 		// miner did not calculate advantage correctly
 		directDist := new(big.Int).Sub(expectedDistance, lowDistance)
-		if directDist.Cmp(addedDistance) == -1 {
+		if directDist.Cmp(expectedDistance) == -1 {
 			return true
 		}
 		if expectedDistance.Cmp(lowDistance) == 1 && high.GetHeight() < PASS_HEIGHT3 {

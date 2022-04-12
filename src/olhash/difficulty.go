@@ -2,6 +2,7 @@ package olhash
 
 import (
 	p2p_pb "github.com/overline-mining/gool/src/protos"
+	//"go.uber.org/zap"
 	"math/big"
 )
 
@@ -56,7 +57,7 @@ var BIG_MAGICNUMBER2 = new(big.Int).SetInt64(161550000)
 var BIG_MAGICNUMBER3 = new(big.Int).SetInt64(1215500)
 var BIG_MAGICNUMBER4 = new(big.Int).SetInt64(1506600)
 var BIG_MAGICNUMBER5 = new(big.Int).SetInt64(16155)
-var BIG_MAGICNUMBER6 = new(big.Int).SetInt64(16055)
+var BIG_MAGICNUMBER6 = new(big.Int).SetInt64(15066)
 var BIG_DECAYCONSTANT = new(big.Int).SetInt64(66000000)
 
 // why is all of this in BigInt if they squish it back to a uint64 in js?
@@ -71,7 +72,7 @@ func GetDifficultyPreExp(currentTimestamp, lastBlockTimestamp uint64, lastBlockD
 		actualMinDiff.Set(minimumDiff)
 	}
 	indexedHeaderTime := new(big.Int).SetUint64(newestHeaderInBlock.GetTimestamp())
-	indexedHeaderTime.Div(indexedHeaderTime, BIG_1000)
+	indexedHeaderTime.Quo(indexedHeaderTime, BIG_1000)
 	bigCurrentTime := new(big.Int).SetUint64(currentTimestamp)
 	bigLastTime := new(big.Int).SetUint64(lastBlockTimestamp)
 	bigNNewBlocks := new(big.Int).SetInt64(nNewBlocks)
@@ -116,16 +117,16 @@ func GetDifficultyPreExp(currentTimestamp, lastBlockTimestamp uint64, lastBlockD
 		return result.SetUint64(DIFF_AT_A)
 	}
 
-	staleCost := new(big.Int).Div(new(big.Int).Sub(bigCurrentTime, bigLastTime), BIG_TIMEWINDOW)
+	staleCost := new(big.Int).Quo(new(big.Int).Sub(bigCurrentTime, timeBound), BIG_TIMEWINDOW)
 
 	if staleCost.Cmp(BIG_ZERO) == 1 && lastBlockTimestamp <= BT_H {
 		elapsedTime.Sub(elapsedTime, staleCost)
 	}
 
-	// someone didn't know how to use ||
 	if lastBlockTimestamp > AT_B && elapsedTime.Cmp(BIG_THIRTYSIX) == 1 && bigNNewBlocks.Cmp(BIG_ONE) == 1 {
-		if (lastBlockTimestamp > AT_D && elapsedTime.Cmp(BIG_EIGHTYSIX) == 1 && bigNNewBlocks.Cmp(BIG_ONE) == 1) ||
-			(lastBlockTimestamp < AT_C) {
+		if lastBlockTimestamp > AT_D && elapsedTime.Cmp(BIG_EIGHTYSIX) == 1 && bigNNewBlocks.Cmp(BIG_ONE) == 1 {
+			elapsedTime.Mul(elapsedTime, bigNNewBlocks)
+		} else if lastBlockTimestamp < AT_C {
 			elapsedTime.Mul(elapsedTime, bigNNewBlocks)
 		}
 	}
@@ -140,7 +141,7 @@ func GetDifficultyPreExp(currentTimestamp, lastBlockTimestamp uint64, lastBlockD
 
 	elapsedTime.Set(elapsedTimeBonus)
 
-	x := new(big.Int).Sub(BIG_ONE, new(big.Int).Div(elapsedTime, BIG_TIMEWINDOW))
+	x := new(big.Int).Sub(BIG_ONE, new(big.Int).Quo(elapsedTime, BIG_TIMEWINDOW))
 	y := new(big.Int)
 	n := new(big.Int)
 	z := new(big.Int).SetInt64(0)
@@ -148,7 +149,7 @@ func GetDifficultyPreExp(currentTimestamp, lastBlockTimestamp uint64, lastBlockD
 
 	if x.Cmp(BIG_MINUS99) == -1 {
 		z.Set(x)
-		if lastBlockTimestamp < 1647022731 {
+		if lastBlockTimestamp < SPECIAL_BLOCKTIME_FOUR {
 			x.Set(BIG_MINUS99)
 		}
 		if lastBlockTimestamp > WIREMIN_A {
@@ -175,11 +176,11 @@ func GetDifficultyPreExp(currentTimestamp, lastBlockTimestamp uint64, lastBlockD
 			}
 		} else {
 			if lastBlockTimestamp >= WIREMIN_A {
-				n.Add(BIG_MAGICNUMBER3, elapsedTimeBonus) // = BigInt(1215500) - elapsedTimeBonus; // <-- AT
+				n.Sub(BIG_MAGICNUMBER3, elapsedTimeBonus) // = BigInt(1215500) - elapsedTimeBonus; // <-- AT
 			} else if lastBlockTimestamp >= SPECIAL_BLOCKTIME_FIVE {
 				n.Sub(BIG_MAGICNUMBER2, elapsedTimeBonus) //BigInt(161550000) - elapsedTimeBonus; // <-- AT
 			} else {
-				n.Sub(BIG_MAGICNUMBER4, elapsedTimeBonus) // BigInt(1506600) + elapsedTimeBonus; // <-- AT2
+				n.Add(BIG_MAGICNUMBER4, elapsedTimeBonus) // BigInt(1506600) + elapsedTimeBonus; // <-- AT2
 			}
 		}
 	} else {
@@ -193,7 +194,8 @@ func GetDifficultyPreExp(currentTimestamp, lastBlockTimestamp uint64, lastBlockD
 		}
 	}
 
-	y.Div(localLastDiff, bigNNewBlocks)
+	y.Quo(localLastDiff, n)
+
 	// x = x * y
 	x.Mul(x, y)
 	m.Set(x)

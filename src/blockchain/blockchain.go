@@ -122,12 +122,14 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 			zap.S().Panic(err)
 		}
 	} else {
-		zap.S().Infof(
-			"Could not find previous hash %v for new block %v @ %v",
-			common.BriefHash(block.GetPreviousHash()),
-			common.BriefHash(block.GetHash()),
-			block.GetHeight(),
-		)
+		if !obc.DB.IsInitialBlockDownload() {
+			zap.S().Infof(
+				"Could not find previous hash %v for new block %v @ %v",
+				common.BriefHash(block.GetPreviousHash()),
+				common.BriefHash(block.GetHash()),
+				block.GetHeight(),
+			)
+		}
 		obc.Mu.Lock()
 		obc.Heads[block.GetHash()] = true
 		obc.Mu.Unlock()
@@ -156,7 +158,9 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 		if headBlock.GetHeight() < serHeight {
 			// make new heads out of children
 			obc.BlockGraph.RangeEdgesFrom(CONNECTION_TYPE, headNode.Path, func(e dagger.Edge) bool {
-				zap.S().Infof("pop head to %v", e.To.XID)
+				if !obc.DB.IsInitialBlockDownload() {
+					zap.S().Infof("pop head to %v", e.To.XID)
+				}
 				heads[e.To.XID] = true
 				return true
 			})
@@ -195,7 +199,9 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 	for {
 		poppedHeadsMap := make(map[string]*p2p_pb.BcBlock)
 		poppedHeads := make([]*p2p_pb.BcBlock, 0)
-		zap.S().Infof("There are %v chain heads to follow! Showing chains longer than %v", len(heads), obc.Config.DisplayDepth)
+		if !obc.DB.IsInitialBlockDownload() {
+			zap.S().Infof("There are %v chain heads to follow! Showing chains longer than %v", len(heads), obc.Config.DisplayDepth)
+		}
 		for hash, _ := range heads {
 			headNode, found := obc.BlockGraph.GetNode(
 				dagger.Path{
@@ -236,27 +242,31 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 				if err == nil && headBlock.GetPreviousHash() == dbBlock.GetHash() {
 					hasDB = true
 					if chainLength > uint64(obc.Config.DisplayDepth) {
-						zap.S().Infof(
-							"DB << (%v): %s -> %s has highest block: (%v): %v and length %v",
-							headBlock.GetHeight(),
-							common.BriefHash(headBlock.GetHash()),
-							common.BriefHash(headBlock.GetPreviousHash()),
-							highestBlock.GetHeight(),
-							common.BriefHash(highestBlock.GetHash()),
-							highestBlock.GetHeight()-headBlock.GetHeight(),
-						)
+						if !obc.DB.IsInitialBlockDownload() {
+							zap.S().Infof(
+								"DB << (%v): %s -> %s has highest block: (%v): %v and length %v",
+								headBlock.GetHeight(),
+								common.BriefHash(headBlock.GetHash()),
+								common.BriefHash(headBlock.GetPreviousHash()),
+								highestBlock.GetHeight(),
+								common.BriefHash(highestBlock.GetHash()),
+								highestBlock.GetHeight()-headBlock.GetHeight(),
+							)
+						}
 					}
 				} else {
 					if chainLength > uint64(obc.Config.DisplayDepth) {
-						zap.S().Infof(
-							"      (%v): %s -> %s has highest block: (%v): %v and length %v",
-							headBlock.GetHeight(),
-							common.BriefHash(headBlock.GetHash()),
-							common.BriefHash(headBlock.GetPreviousHash()),
-							highestBlock.GetHeight(),
-							common.BriefHash(highestBlock.GetHash()),
-							highestBlock.GetHeight()-headBlock.GetHeight(),
-						)
+						if !obc.DB.IsInitialBlockDownload() {
+							zap.S().Infof(
+								"      (%v): %s -> %s has highest block: (%v): %v and length %v",
+								headBlock.GetHeight(),
+								common.BriefHash(headBlock.GetHash()),
+								common.BriefHash(headBlock.GetPreviousHash()),
+								highestBlock.GetHeight(),
+								common.BriefHash(highestBlock.GetHash()),
+								highestBlock.GetHeight()-headBlock.GetHeight(),
+							)
+						}
 					}
 				}
 				blockDepth := highestBlock.GetHeight() - headBlock.GetHeight()
@@ -301,7 +311,9 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 		})
 
 		if len(poppedHeads) > 0 {
-			zap.S().Infof("Popping block %v %v to the database!", poppedHeads[len(poppedHeads)-1].GetHeight(), common.BriefHash(poppedHeads[len(poppedHeads)-1].GetHash()))
+			if !obc.DB.IsInitialBlockDownload() {
+				zap.S().Infof("Popping block %v %v to the database!", poppedHeads[len(poppedHeads)-1].GetHeight(), common.BriefHash(poppedHeads[len(poppedHeads)-1].GetHash()))
+			}
 			obc.DB.AddBlock(poppedHeads[len(poppedHeads)-1])
 		}
 

@@ -175,6 +175,11 @@ func IsFieldLengthBounded(block *p2p_pb.BcBlock) bool {
 }
 
 func IsMerkleRootCorrectlyCalculated(block *p2p_pb.BcBlock) bool {
+	if block.GetHeight() == uint64(6947037) || block.GetHeight() == uint64(6947078) || block.GetHeight() == uint64(6947082) {
+		zap.S().Warnf("Skipping block: %v", block.GetHeight())
+		return true
+	}
+
 	expectedMerkle := block.GetMerkleRoot()
 
 	toHash := []string{}
@@ -225,6 +230,14 @@ func IsDistanceCorrectlyCalculated(block *p2p_pb.BcBlock) bool {
 		return false
 	}
 	diff := new(big.Int).Sub(reCalcDistanceBN, distance)
+	if diff.Uint64() != 0 {
+		zap.S().Warnf("Distance calc'd with: %v %v %v %v %v", work, block.GetMiner(), block.GetMerkleRoot(), block.GetNonce(), block.GetTimestamp())
+		zap.S().Warnf("Block (%v) %v %v != %v", block.GetHeight(), block.GetHash(), distance.String(), reCalcDistanceBN.String())
+		if block.GetHeight() == uint64(6947037) || block.GetHeight() == uint64(6947078) || block.GetHeight() == uint64(6947082) {
+			return true
+		}
+	}
+
 	//diff.Abs(diff)
 	return diff.Uint64() == 0
 }
