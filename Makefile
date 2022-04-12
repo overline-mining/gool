@@ -9,8 +9,14 @@ DEB_HASH=$(shell git rev-parse HEAD)
 
 all: build-node-linux
 
+dev: build-node-linux-test
+
 lint:
 	./build/env.sh go fmt ./...
+
+build-node-linux-test:
+	./build/env.sh go get -v ./...
+	./build/env.sh go build -race -o build/bin/node ./src/node
 
 build-node-linux:
 	./build/env.sh go get -v ./...

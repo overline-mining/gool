@@ -2,8 +2,11 @@ package validation
 
 import (
 	"github.com/overline-mining/gool/src/common"
+	"github.com/overline-mining/gool/src/olhash"
 	p2p_pb "github.com/overline-mining/gool/src/protos"
 	"go.uber.org/zap"
+	"math/big"
+	"sort"
 )
 
 func ValidateBlockRange(startingBlock *p2p_pb.BcBlock, blocks []*p2p_pb.BcBlock) (bool, int) {
@@ -128,6 +131,18 @@ func wavContiguityProblems(low, high *p2p_pb.BcBlock) bool {
 }
 
 func OrderedBlockPairIsValid(low, high *p2p_pb.BcBlock) bool {
+	return (orderedBlockPairIsValid(low, high, false) &&
+		(validateDifficultyProgression(low, high) || true) &&
+		(validateDistanceProgression(low, high) || true))
+}
+
+func OrderedBlockPairIsValidStrict(low, high *p2p_pb.BcBlock) bool {
+	return (orderedBlockPairIsValid(low, high, true) &&
+		validateDifficultyProgression(low, high) &&
+		validateDistanceProgression(low, high))
+}
+
+func orderedBlockPairIsValid(low, high *p2p_pb.BcBlock, isStrict bool) bool {
 	const nitPickedValidationHeight = uint64(6850000)
 	if (high.GetHeight()-1 != low.GetHeight()) || (high.GetPreviousHash() != low.GetHash()) {
 		return false
@@ -135,41 +150,42 @@ func OrderedBlockPairIsValid(low, high *p2p_pb.BcBlock) bool {
 	if low.GetHeight() != 1 { // do not validate headers if comparing to genesis block
 		if !globalContiguityProblems(low, high) {
 			if !btcContiguityProblems(low, high) && !HeaderRangeIsContiguous(low.GetBlockchainHeaders().GetBtc(), high.GetBlockchainHeaders().GetBtc()) {
-				if low.GetHeight() >= nitPickedValidationHeight {
+				if low.GetHeight() >= nitPickedValidationHeight && !isStrict {
 					zap.S().Warnf("Problem in BTC contiguity spanning blocks %v %v -> %v %v", low.GetHeight(), common.BriefHash(low.GetHash()), high.GetHeight(), common.BriefHash(high.GetHash()))
 				} else {
 					return false
 				}
 			}
 			if !ethContiguityProblems(low, high) && !HeaderRangeIsContiguous(low.GetBlockchainHeaders().GetEth(), high.GetBlockchainHeaders().GetEth()) {
-				if low.GetHeight() >= nitPickedValidationHeight {
+				if low.GetHeight() >= nitPickedValidationHeight && !isStrict {
 					zap.S().Warnf("Problem in ETH contiguity spanning blocks %v %v -> %v %v", low.GetHeight(), common.BriefHash(low.GetHash()), high.GetHeight(), common.BriefHash(high.GetHash()))
 				} else {
 					return false
 				}
 			}
 			if !lskContiguityProblems(low, high) && !HeaderRangeIsContiguous(low.GetBlockchainHeaders().GetLsk(), high.GetBlockchainHeaders().GetLsk()) {
-				if low.GetHeight() >= nitPickedValidationHeight {
+				if low.GetHeight() >= nitPickedValidationHeight && !isStrict {
 					zap.S().Warnf("Problem in LSK contiguity spanning blocks %v %v -> %v %v", low.GetHeight(), common.BriefHash(low.GetHash()), high.GetHeight(), common.BriefHash(high.GetHash()))
 				} else {
 					return false
 				}
 			}
 			if !neoContiguityProblems(low, high) && !HeaderRangeIsContiguous(low.GetBlockchainHeaders().GetNeo(), high.GetBlockchainHeaders().GetNeo()) {
-				if low.GetHeight() >= nitPickedValidationHeight {
+				if low.GetHeight() >= nitPickedValidationHeight && !isStrict {
 					zap.S().Warnf("Problem in NEO contiguity spanning blocks %v %v -> %v %v", low.GetHeight(), common.BriefHash(low.GetHash()), high.GetHeight(), common.BriefHash(high.GetHash()))
 				} else {
 					return false
 				}
 			}
 			if !wavContiguityProblems(low, high) && !HeaderRangeIsContiguous(low.GetBlockchainHeaders().GetWav(), high.GetBlockchainHeaders().GetWav()) {
-				if low.GetHeight() >= nitPickedValidationHeight {
+				if low.GetHeight() >= nitPickedValidationHeight && !isStrict {
 					zap.S().Warnf("Problem in WAV contiguity spanning blocks %v %v -> %v %v", low.GetHeight(), common.BriefHash(low.GetHash()), high.GetHeight(), common.BriefHash(high.GetHash()))
 				} else {
 					return false
 				}
 			}
 		}
+
 	}
 	return true
 }
@@ -219,4 +235,124 @@ func HeaderRangeIsContiguous(low, high []*p2p_pb.BlockchainHeader) bool {
 		}
 	}
 	return (isChained(low, high))
+}
+
+func validateDifficultyProgression(low, high *p2p_pb.BcBlock) bool {
+	if low.GetHeight() < 4 && high.GetHeight() < 4 {
+		return true
+	}
+
+	totalHeightChange := GetNewIndexedHeightChange(low, high)
+
+	expectedDifficulty, _ := new(big.Int).SetString(high.GetDifficulty(), 10)
+	bigMinDiff := new(big.Int).SetUint64(olhash.MIN_DIFFICULTY)
+	lastBlockDiff, _ := new(big.Int).SetString(low.GetDifficulty(), 10)
+
+	newestHeader := GetNewestIndexedBlockHeader(high)
+
+	firstDiff := olhash.GetDifficultyPreExp(
+		high.GetTimestamp(), low.GetTimestamp(),
+		lastBlockDiff, bigMinDiff,
+		totalHeightChange,
+		newestHeader,
+	)
+
+	finalDiff := olhash.GetExpFactorDiff(firstDiff, low.GetHeight())
+
+	result := finalDiff.Cmp(expectedDifficulty) == 0
+
+	if !result {
+		zap.S().Debugf("%v -> expectedDifficulty: %v, calculatedDifficulty: %v", high.GetHeight(), high.GetDifficulty(), finalDiff.String())
+	}
+
+	// note	that the original js code does not require this	to be
+	// true	since it tests that a pointer to an object is not null
+	// rather than the value of the	object
+	return result
+}
+
+func headerHeightDiff(low, high []*p2p_pb.BlockchainHeader) int64 {
+	return int64(high[len(high)-1].GetHeight()) - int64(low[len(low)-1].GetHeight())
+}
+
+func GetNewestIndexedBlockHeader(block *p2p_pb.BcBlock) *p2p_pb.BlockchainHeader {
+	headers := block.GetBlockchainHeaders()
+
+	headersFlat := make([]*p2p_pb.BlockchainHeader, 0)
+	headersFlat = append(headersFlat, headers.GetBtc()...)
+	headersFlat = append(headersFlat, headers.GetEth()...)
+	headersFlat = append(headersFlat, headers.GetLsk()...)
+	headersFlat = append(headersFlat, headers.GetNeo()...)
+	headersFlat = append(headersFlat, headers.GetWav()...)
+
+	sort.SliceStable(headersFlat, func(i, j int) bool {
+		return headersFlat[i].GetTimestamp() < headersFlat[j].GetTimestamp()
+	})
+
+	return headersFlat[len(headersFlat)-1]
+}
+
+func GetNewIndexedHeightChange(low, high *p2p_pb.BcBlock) int64 {
+	nNew := int64(0)
+
+	lowHeaders := low.GetBlockchainHeaders()
+	highHeaders := high.GetBlockchainHeaders()
+
+	nNew += headerHeightDiff(lowHeaders.GetBtc(), highHeaders.GetBtc())
+	nNew += headerHeightDiff(lowHeaders.GetEth(), highHeaders.GetEth())
+	nNew += headerHeightDiff(lowHeaders.GetLsk(), highHeaders.GetLsk())
+	nNew += headerHeightDiff(lowHeaders.GetNeo(), highHeaders.GetNeo())
+	nNew += headerHeightDiff(lowHeaders.GetWav(), highHeaders.GetWav())
+
+	return nNew
+}
+
+func validateDistanceProgression(low, high *p2p_pb.BcBlock) bool {
+	const (
+		PASS_HASH1     = "ce9f9e8b316de889a76d5d70295cedaf8f0894992ee485d5ecf04fea56b2ca62"
+		PASS_HASH2     = "a6eb1f0605ac811a148a9cd864baabe80267765829fad9aca048b9b8ef7f2ab3"
+		SOFT_HEIGHT    = uint64(40000)
+		SOFT_TIMESTAMP = uint64(1584771657)
+		PASS_HEIGHT1   = uint64(2469110)
+		PASS_HEIGHT2   = uint64(2499000)
+		PASS_HEIGHT3   = uint64(5000000)
+	)
+
+	if high.GetHeight() < SOFT_HEIGHT && high.GetTimestamp() < SOFT_TIMESTAMP {
+		return true
+	}
+
+	if high.GetHash() == PASS_HASH1 || high.GetHash() == PASS_HASH2 {
+		return true
+	}
+
+	expectedDistance, _ := new(big.Int).SetString(high.GetTotalDistance(), 10)
+	lowDistance, _ := new(big.Int).SetString(low.GetTotalDistance(), 10)
+	addedDistance, _ := new(big.Int).SetString(high.GetDistance(), 10)
+	calcDistance := new(big.Int).Add(lowDistance, addedDistance)
+
+	matched := (expectedDistance.Cmp(calcDistance) == 0)
+
+	if !matched {
+		if (high.GetHeight() > PASS_HEIGHT1) && (high.GetHeight() < PASS_HEIGHT2) {
+			return true
+		}
+		// miner did not calculate advantage correctly
+		directDist := new(big.Int).Sub(expectedDistance, lowDistance)
+		if directDist.Cmp(addedDistance) == -1 {
+			return true
+		}
+		if expectedDistance.Cmp(lowDistance) == 1 && high.GetHeight() < PASS_HEIGHT3 {
+			return true
+		}
+	}
+
+	if !matched {
+		zap.S().Debugf("%v -> %v, %v != %v", low.GetHeight(), high.GetHeight(), expectedDistance.String(), calcDistance.String())
+	}
+
+	// note that the original js code does not require this to be
+	// true since it tests that a pointer to an object is not null
+	// rather than the value of the object
+	return matched
 }
