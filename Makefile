@@ -15,13 +15,13 @@ lint:
 	./build/env.sh go fmt ./...
 
 build-node-linux-test:
-	./build/env.sh go install golang.org/x/tools/goyacc@latest
+	./build/env.sh go install golang.org/x/tools/cmd/goyacc@latest
 	./build/env.sh go install github.com/blynn/nex@latest
 	./build/env.sh go get -v ./...
 	./build/env.sh go build -race -o build/bin/node ./src/node
 
 build-node-linux:
-	./build/env.sh go install golang.org/x/tools/goyacc@latest
+	./build/env.sh go install golang.org/x/tools/cmd/goyacc@latest
 	./build/env.sh go install github.com/blynn/nex@latest
 	./build/env.sh go get -v ./...
 	./build/env.sh go build -o build/bin/node ./src/node
