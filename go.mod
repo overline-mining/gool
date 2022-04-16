@@ -9,8 +9,9 @@ require (
 	github.com/anacrolix/torrent v1.40.0
 	github.com/autom8ter/dagger v1.0.1 // indirect
 	github.com/br0xen/boltbrowser v0.0.0-20210531150353-7f10a81cece0 // indirect
+	github.com/ethereum/go-ethereum v1.10.17 // indirect
 	github.com/golang/protobuf v1.5.2
-	github.com/hashicorp/golang-lru v0.5.4 // indirect
+	github.com/hashicorp/golang-lru v0.5.5-0.20210104140557-80c98217689d // indirect
 	github.com/pierrec/lz4/v4 v4.1.12 // indirect
 	github.com/pkg/errors v0.9.1
 	github.com/schollz/progressbar/v3 v3.8.5 // indirect

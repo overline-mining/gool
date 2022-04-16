@@ -35,10 +35,12 @@ import (
 	"sync"
 	"syscall"
 
+	geth_rpc "github.com/ethereum/go-ethereum/rpc"
 	chain "github.com/overline-mining/gool/src/blockchain"
 	"github.com/overline-mining/gool/src/genesis"
 	"github.com/overline-mining/gool/src/protocol/messages"
 	p2p_pb "github.com/overline-mining/gool/src/protos"
+	"github.com/overline-mining/gool/src/rpc"
 	//"github.com/overline-mining/gool/src/transactions"
 	"github.com/autom8ter/dagger"
 	db "github.com/overline-mining/gool/src/database"
@@ -349,6 +351,14 @@ func main() {
 		IbdTransitionPeriodRelativeDepth: float64(0.005),
 	}
 	goolChain.UnsetFollowingChain()
+
+	blockchainService := new(rpc.BlockchainService)
+	blockchainService.Chain = &goolChain
+	rpcServer := geth_rpc.NewServer()
+	rpcServer.RegisterName("ovl", blockchainService)
+
+	serviceListener, _ := net.ListenUnix("unix", &net.UnixAddr{Net: "unix", Name: "/tmp/gool.sock"})
+	go rpcServer.ServeListener(serviceListener)
 
 	id_bytes := make([]byte, 32)
 	rand.Read(id_bytes)
