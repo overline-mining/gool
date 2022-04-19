@@ -2,7 +2,7 @@ package rpc
 
 import (
 	//"encoding/hex"
-	"errors"
+	//"errors"
 	"github.com/overline-mining/gool/src/blockchain"
 	p2p_pb "github.com/overline-mining/gool/src/protos"
 	//"go.uber.org/zap"
@@ -28,9 +28,10 @@ func (s *BlockchainService) GetBlockByHeight(height uint64) (p2p_pb.BcBlock, err
 	return *block, err
 }
 
-func (s *BlockchainService) Div(a, b int) (int, error) {
-	if b == 0 {
-		return 0, errors.New("divide by zero")
+func (s *BlockchainService) GetHighestBlock() (p2p_pb.BcBlock, error) {
+	block, err := s.Chain.GetHighestBlock()
+	if err != nil {
+		block = new(p2p_pb.BcBlock)
 	}
-	return a / b, nil
+	return *block, err
 }

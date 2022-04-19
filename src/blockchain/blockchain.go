@@ -423,3 +423,21 @@ func (obc *OverlineBlockchain) GetBlockByHeight(height uint64) (*p2p_pb.BcBlock,
 	}
 	return block, err
 }
+
+func (obc *OverlineBlockchain) GetHighestBlock() (*p2p_pb.BcBlock, error) {
+	var block *p2p_pb.BcBlock = nil
+	var err error = nil
+
+	obc.Mu.Lock()
+	defer obc.Mu.Unlock()
+	if obc.currentHighestBlock != nil {
+		return obc.currentHighestBlock, nil
+	}
+
+	block = obc.DB.HighestBlock()
+	if block == nil {
+		err = errors.New("No highest block defined yet!")
+	}
+
+	return block, err
+}

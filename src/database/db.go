@@ -349,11 +349,10 @@ func (odb *OverlineDB) HighestBlockHeight() uint64 {
 	return 0
 }
 
-func (odb *OverlineDB) HighestBlock() p2p_pb.BcBlock {
+func (odb *OverlineDB) HighestBlock() *p2p_pb.BcBlock {
 	odb.mu.Lock()
 	defer odb.mu.Unlock()
-	block := *odb.highestBlock
-	return block
+	return odb.highestBlock
 }
 
 func (odb *OverlineDB) AddBlock(block *p2p_pb.BcBlock) error {
