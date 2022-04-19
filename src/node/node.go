@@ -27,6 +27,7 @@ import (
 	"github.com/anacrolix/torrent/tracker"
 	trHttp "github.com/anacrolix/torrent/tracker/http"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -60,6 +61,11 @@ var (
 	validateFullChain   = flag.Bool("full-validation", false, "Run a slow but complete validation of your local blockchain DB")
 	dropChainstate      = flag.Bool("drop-chainstate", false, "Delete the last saved chainstate from the database")
 	pruneDatabaseTo     = flag.Int("prune-database-to", 0, "Before starting the node, remove all blocks after this height.")
+	ipcDisable          = flag.Bool("ipcdisable", false, "Turn off IPC based JSON-RPC.")
+	ipcPath             = flag.String("ipcpath", ".overline/gool.sock", "Path to the IPC based JSON-RPC endpoint.")
+	httpEnable          = flag.Bool("http", false, "Enable JSON-RPC over HTTP.")
+	httpAddr            = flag.String("http.addr", "localhost", "The address bound to the HTTP JSON-RPC server.")
+	httpPort            = flag.Int("http.port", 4712, "The port to listen on for the HTTP JSON-RPC server.")
 )
 
 type ConcurrentPeerMap struct {
@@ -295,11 +301,21 @@ func main() {
 	startingHeight := uint64(0)
 	dbFilePath := filepath.Join(*olWorkDir, *dbFileName)
 	gooldb := db.OverlineDB{Config: db.DefaultOverlineDBConfig()}
+
 	pruneToHeight := uint64(0)
 	if *pruneDatabaseTo > 0 {
 		pruneToHeight = uint64(*pruneDatabaseTo)
 	}
 	err = gooldb.Open(dbFilePath, *dropChainstate, pruneToHeight)
+
+	// add ctrl-c catcher for closing the database
+	c := make(chan os.Signal)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-c
+		gooldb.Close()
+		os.Exit(1)
+	}()
 
 	if err != nil {
 		startingHeight = 1
@@ -322,15 +338,6 @@ func main() {
 
 	checkError(err)
 
-	// add ctrl-c catcher for closing the database
-	c := make(chan os.Signal)
-	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		<-c
-		gooldb.Close()
-		os.Exit(1)
-	}()
-
 	// run full local validation if requested
 	if *validateFullChain {
 		gooldb.FullLocalValidation()
@@ -352,13 +359,26 @@ func main() {
 	}
 	goolChain.UnsetFollowingChain()
 
+	rpcServer := geth_rpc.NewServer()
+
 	blockchainService := new(rpc.BlockchainService)
 	blockchainService.Chain = &goolChain
-	rpcServer := geth_rpc.NewServer()
+
 	rpcServer.RegisterName("ovl", blockchainService)
 
-	serviceListener, _ := net.ListenUnix("unix", &net.UnixAddr{Net: "unix", Name: "/tmp/gool.sock"})
-	go rpcServer.ServeListener(serviceListener)
+	var ipcRpcListener net.Listener
+	if !*ipcDisable {
+		ipcRpcListener, _ = net.ListenUnix("unix", &net.UnixAddr{Net: "unix", Name: *ipcPath})
+		defer ipcRpcListener.Close()
+		go rpcServer.ServeListener(ipcRpcListener)
+	}
+
+	if *httpEnable {
+		go func() {
+			err := http.ListenAndServe(fmt.Sprintf("%v:%v", *httpAddr, *httpPort), rpcServer)
+			zap.S().Error(err)
+		}()
+	}
 
 	id_bytes := make([]byte, 32)
 	rand.Read(id_bytes)
