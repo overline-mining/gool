@@ -7,6 +7,7 @@ import (
 	"github.com/overline-mining/gool/src/database"
 	//"github.com/overline-mining/gool/src/validation"
 	"encoding/hex"
+	"errors"
 	p2p_pb "github.com/overline-mining/gool/src/protos"
 	"go.uber.org/zap"
 	"sort"
@@ -368,6 +369,7 @@ func (obc *OverlineBlockchain) AddBlockRange(blocks *p2p_pb.BcBlocks) {
 func (obc *OverlineBlockchain) GetBlockByHash(hash string) (*p2p_pb.BcBlock, error) {
 	var block *p2p_pb.BcBlock = nil
 	var err error = nil
+	var hashBytes []byte
 	node, found := obc.BlockGraph.GetNode(
 		dagger.Path{
 			XID:   hash,
@@ -376,7 +378,7 @@ func (obc *OverlineBlockchain) GetBlockByHash(hash string) (*p2p_pb.BcBlock, err
 	if found {
 		block = node.Attributes["block"].(*p2p_pb.BcBlock)
 	} else {
-		hashBytes, err := hex.DecodeString(hash)
+		hashBytes, err = hex.DecodeString(hash)
 		if err != nil {
 			return block, err
 		}
@@ -389,5 +391,35 @@ func (obc *OverlineBlockchain) GetBlockByHeight(height uint64) (*p2p_pb.BcBlock,
 	var block *p2p_pb.BcBlock = nil
 	var err error = nil
 
+	obc.Mu.Lock()
+	defer obc.Mu.Unlock()
+	highestHash := obc.currentHighestBlock.GetHash()
+	highestHeight := obc.currentHighestBlock.GetHeight()
+	if highestHeight == height {
+		return obc.currentHighestBlock, nil
+	}
+
+	if highestHeight < height {
+		return block, errors.New("Requested height exceeds chain height!")
+	}
+
+	highestNode, _ := obc.BlockGraph.GetNode(
+		dagger.Path{
+			XID:   highestHash,
+			XType: BLOCK_TYPE,
+		})
+	// walk back from the current best block and find the block with requested height
+	// ignore other paths in tree
+	obc.BlockGraph.ReverseDFS(CONNECTION_TYPE, highestNode.Path, func(node dagger.Node) bool {
+		blk := node.Attributes["block"].(*p2p_pb.BcBlock)
+		if blk.GetHeight() == height {
+			zap.S().Infof("found height %v == %v", blk.GetHeight(), height)
+			block = blk
+		}
+		return true
+	})
+	if block == nil {
+		block, err = obc.DB.GetBlockByHeight(height)
+	}
 	return block, err
 }
