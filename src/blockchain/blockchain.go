@@ -18,15 +18,25 @@ const (
 	CONNECTION_TYPE = "connects"
 )
 
+type HeadInformation struct {
+	Hash         string
+	Depth        uint64
+	LowestBlock  *p2p_pb.BcBlock
+	HighestBlock *p2p_pb.BcBlock
+	HasDB        bool
+}
+
 type OverlineBlockchainConfig struct {
-	DisjointCheckupDepth int `json:"disjoint_checkup_depth"` // if there is a chain segment not connected to db, how long does it have to be to ask to go look for blocks to try to connect?
-	DisplayDepth         int `json:"display_depth"`          // only show chains of this length or longer
+	DisjointCheckupDepth  int `json:"disjoint_checkup_depth"`  // if there is a chain segment not connected to db, how long does it have to be to ask to go look for blocks to try to connect?
+	DisjointCheckupHeight int `json:"disjoint_checkup_height"` // if any chain segment not connected to db is higher by this number of blocks, investigate it
+	DisplayDepth          int `json:"display_depth"`           // only show chains of this length or longer
 }
 
 func DefaultOverlineBlockchainConfig() OverlineBlockchainConfig {
 	return OverlineBlockchainConfig{
-		DisjointCheckupDepth: 10,
-		DisplayDepth:         10,
+		DisjointCheckupDepth:  10,
+		DisjointCheckupHeight: 20,
+		DisplayDepth:          10,
 	}
 }
 
@@ -37,6 +47,8 @@ type OverlineBlockchain struct {
 	followMu                         sync.Mutex
 	Heads                            map[string]bool
 	HeadsToCheck                     map[string]uint64
+	currentHighestBlock              *p2p_pb.BcBlock
+	currentHighestNode               *dagger.Node
 	BlockGraph                       *dagger.Graph
 	DB                               *database.OverlineDB
 	isFollowingChain                 bool
@@ -195,6 +207,9 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 	// add the highest popped head to the chain
 	// if the head is longer than the checkup depth and not connected to database
 	// add to checkup list and grab blocks from all to see if it can be sorted out
+	// mark the head with the longest chain and the head with the highest chain
+	longestHeadWithDB := HeadInformation{Hash: "", Depth: uint64(0), LowestBlock: nil, HighestBlock: nil, HasDB: false}
+	highestHead := HeadInformation{Hash: "", Depth: uint64(0), LowestBlock: nil, HighestBlock: nil, HasDB: false}
 	for {
 		poppedHeadsMap := make(map[string]*p2p_pb.BcBlock)
 		poppedHeads := make([]*p2p_pb.BcBlock, 0)
@@ -264,6 +279,7 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 						heads[e.To.XID] = true
 						return true
 					})
+
 					obc.BlockGraph.DelNode(headNode.Path)
 					delete(heads, hash)
 					poppedHeadsMap[headBlock.GetHash()] = headBlock
@@ -276,8 +292,40 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 					}
 					obc.CheckupMu.Unlock()
 				}
+				if (hasDB || poppedParent) &&
+					(longestHeadWithDB.LowestBlock == nil ||
+						common.BlockOrderingRule(longestHeadWithDB.LowestBlock, headBlock) ||
+						blockDepth > longestHeadWithDB.Depth) {
+					longestHeadWithDB.Hash = hash
+					longestHeadWithDB.Depth = blockDepth
+					longestHeadWithDB.LowestBlock = headBlock
+					longestHeadWithDB.HighestBlock = highestBlock
+					longestHeadWithDB.HasDB = true
+				}
+
+				if highestHead.LowestBlock == nil || common.BlockOrderingRule(highestHead.HighestBlock, highestBlock) {
+					highestHead.Hash = hash
+					highestHead.Depth = blockDepth
+					highestHead.LowestBlock = headBlock
+					highestHead.HighestBlock = highestBlock
+					highestHead.HasDB = (hasDB || poppedParent)
+				}
 			}
 
+		}
+
+		if longestHeadWithDB.LowestBlock != nil {
+			obc.Mu.Lock()
+			obc.currentHighestBlock = longestHeadWithDB.HighestBlock
+			obc.Mu.Unlock()
+			if highestHead.LowestBlock != nil && !highestHead.HasDB {
+				heightDiff := highestHead.HighestBlock.GetHeight() - longestHeadWithDB.HighestBlock.GetHeight()
+				if heightDiff > uint64(obc.Config.DisjointCheckupHeight) {
+					obc.CheckupMu.Lock()
+					obc.HeadsToCheck[highestHead.LowestBlock.GetHash()] = highestHead.LowestBlock.GetHeight()
+					obc.CheckupMu.Unlock()
+				}
+			}
 		}
 
 		for _, blk := range poppedHeadsMap {
