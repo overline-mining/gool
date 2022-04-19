@@ -9,7 +9,6 @@ import (
 	"encoding/hex"
 	p2p_pb "github.com/overline-mining/gool/src/protos"
 	"go.uber.org/zap"
-	"math/big"
 	"sort"
 	"sync"
 )
@@ -89,7 +88,7 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 		testHashBytes, err := hex.DecodeString(block.GetHash())
 		var testDbBlock *p2p_pb.BcBlock
 		if err == nil {
-			testDbBlock, err = obc.DB.GetBlock(testHashBytes)
+			testDbBlock, err = obc.DB.GetBlockByHash(testHashBytes)
 		}
 		if err == nil && testDbBlock.GetHash() == block.GetHash() {
 			return
@@ -214,19 +213,8 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 			highestBlock := headNode.Attributes["block"].(*p2p_pb.BcBlock)
 			obc.BlockGraph.DFS(CONNECTION_TYPE, headNode.Path, func(node dagger.Node) bool {
 				blk := node.Attributes["block"].(*p2p_pb.BcBlock)
-				if blk.GetHeight() > highestBlock.GetHeight() {
+				if common.BlockOrderingRule(highestBlock, blk) {
 					highestBlock = blk
-				} else if blk.GetHeight() == blk.GetHeight() {
-					highestDist, _ := new(big.Int).SetString(highestBlock.GetTotalDistance(), 10)
-					blkDist, _ := new(big.Int).SetString(blk.GetTotalDistance(), 10)
-					compare := blkDist.Cmp(highestDist)
-					if compare == 0 {
-						if blk.GetTimestamp() < highestBlock.GetTimestamp() {
-							highestBlock = blk
-						}
-					} else if compare > 0 {
-						highestBlock = blk
-					}
 				}
 				return true
 			})
@@ -234,7 +222,7 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 			hashBytes, err := hex.DecodeString(headBlock.GetPreviousHash())
 			var dbBlock *p2p_pb.BcBlock
 			if err == nil {
-				dbBlock, err = obc.DB.GetBlock(hashBytes)
+				dbBlock, err = obc.DB.GetBlockByHash(hashBytes)
 			}
 			if highestBlock != nil {
 				hasDB := false
@@ -298,16 +286,7 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 
 		//finally stick the best popped head in the database, the others perish
 		sort.SliceStable(poppedHeads, func(i, j int) bool {
-			if poppedHeads[i].GetHeight() == poppedHeads[j].GetHeight() {
-				iDist, _ := new(big.Int).SetString(poppedHeads[i].GetTotalDistance(), 10)
-				jDist, _ := new(big.Int).SetString(poppedHeads[j].GetTotalDistance(), 10)
-				compare := iDist.Cmp(jDist)
-				if compare == 0 {
-					return poppedHeads[i].GetTimestamp() < poppedHeads[j].GetTimestamp()
-				}
-				return compare < 0
-			}
-			return poppedHeads[i].GetHeight() < poppedHeads[j].GetHeight()
+			return common.BlockOrderingRule(poppedHeads[i], poppedHeads[j])
 		})
 
 		if len(poppedHeads) > 0 {
@@ -336,4 +315,31 @@ func (obc *OverlineBlockchain) AddBlockRange(blocks *p2p_pb.BcBlocks) {
 	for _, block := range blocks.Blocks {
 		obc.AddBlock(block)
 	}
+}
+
+func (obc *OverlineBlockchain) GetBlockByHash(hash string) (*p2p_pb.BcBlock, error) {
+	var block *p2p_pb.BcBlock = nil
+	var err error = nil
+	node, found := obc.BlockGraph.GetNode(
+		dagger.Path{
+			XID:   hash,
+			XType: BLOCK_TYPE,
+		})
+	if found {
+		block = node.Attributes["block"].(*p2p_pb.BcBlock)
+	} else {
+		hashBytes, err := hex.DecodeString(hash)
+		if err != nil {
+			return block, err
+		}
+		block, err = obc.DB.GetBlockByHash(hashBytes)
+	}
+	return block, err
+}
+
+func (obc *OverlineBlockchain) GetBlockByHeight(height uint64) (*p2p_pb.BcBlock, error) {
+	var block *p2p_pb.BcBlock = nil
+	var err error = nil
+
+	return block, err
 }
