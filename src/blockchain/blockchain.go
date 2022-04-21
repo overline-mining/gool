@@ -424,6 +424,44 @@ func (obc *OverlineBlockchain) GetBlockByHeight(height uint64) (*p2p_pb.BcBlock,
 	return block, err
 }
 
+func (obc *OverlineBlockchain) GetBlockByTx(txHash string) (*p2p_pb.BcBlock, error) {
+	var block *p2p_pb.BcBlock = nil
+	var err error = nil
+
+	txHashBytes, err := hex.DecodeString(txHash)
+
+	if err != nil {
+		return block, err
+	}
+
+	obc.Mu.Lock()
+	highestHash := obc.currentHighestBlock.GetHash()
+	obc.Mu.Unlock()
+
+	highestNode, _ := obc.BlockGraph.GetNode(
+		dagger.Path{
+			XID:   highestHash,
+			XType: BLOCK_TYPE,
+		})
+	// walk back from the current best block and find the block with requested tx
+	// ignore other paths in tree
+	obc.BlockGraph.ReverseDFS(CONNECTION_TYPE, highestNode.Path, func(node dagger.Node) bool {
+		blk := node.Attributes["block"].(*p2p_pb.BcBlock)
+		if block == nil {
+			for _, tx := range blk.GetTxs() {
+				if tx.GetHash() == txHash {
+					block = blk
+				}
+			}
+		}
+		return true
+	})
+	if block == nil {
+		block, err = obc.DB.GetBlockByTx(txHashBytes)
+	}
+	return block, err
+}
+
 func (obc *OverlineBlockchain) GetHighestBlock() (*p2p_pb.BcBlock, error) {
 	var block *p2p_pb.BcBlock = nil
 	var err error = nil

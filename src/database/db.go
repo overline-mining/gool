@@ -90,6 +90,7 @@ type OverlineDB struct {
 	toSerialize            []*p2p_pb.BcBlock // sorted ascending in block height
 	incomingBlocks         map[string]*p2p_pb.BcBlock
 	incomingBlocksByHeight map[uint64]string // map of height -> hash
+	incomingBlocksByTx     map[string]string // map of tx hash -> hash
 	txMemPool              map[string]*p2p_pb.Transaction
 	mtxMemPool             map[string]*p2p_pb.MarkedTransaction
 	lookupCache            *lru.ARCCache
@@ -98,11 +99,12 @@ type OverlineDB struct {
 func (odb *OverlineDB) Open(filepath string, dropChainstate bool, pruneDatabaseTo uint64) error {
 	var err error
 	odb.db, err = bolt.Open(filepath, 0600, nil)
-	odb.lookupCache, err = lru.NewARC(odb.Config.ActiveSet)
+	odb.lookupCache, err = lru.NewARC(5 * odb.Config.ActiveSet)
 	odb.mu.Lock()
 	odb.toSerialize = make([]*p2p_pb.BcBlock, 0, 10*odb.Config.AncientChunkSize)
 	odb.incomingBlocks = make(map[string]*p2p_pb.BcBlock)
 	odb.incomingBlocksByHeight = make(map[uint64]string)
+	odb.incomingBlocksByTx = make(map[string]string)
 	odb.txMu.Lock()
 	odb.txMemPool = make(map[string]*p2p_pb.Transaction)
 	odb.mtxMemPool = make(map[string]*p2p_pb.MarkedTransaction)
@@ -228,10 +230,14 @@ func (odb *OverlineDB) Open(filepath string, dropChainstate bool, pruneDatabaseT
 	if odb.tipOfSerializedChain != nil {
 		hashes_to_kill := make([]string, 0)
 		heights_to_kill := make([]uint64, 0)
+		txs_to_kill := make([]string, 0)
 		for _, block := range odb.incomingBlocks {
 			if block.GetHeight() <= odb.tipOfSerializedChain.GetHeight() {
 				hashes_to_kill = append(hashes_to_kill, block.GetHash())
 				heights_to_kill = append(heights_to_kill, block.GetHeight())
+				for _, tx := range block.GetTxs() {
+					txs_to_kill = append(txs_to_kill, tx.GetHash())
+				}
 			}
 		}
 		for _, hash := range hashes_to_kill {
@@ -241,6 +247,10 @@ func (odb *OverlineDB) Open(filepath string, dropChainstate bool, pruneDatabaseT
 		for _, height := range heights_to_kill {
 			delete(odb.incomingBlocksByHeight, height)
 			zap.S().Debugf("Killing: %v", height)
+		}
+		for _, tx := range txs_to_kill {
+			delete(odb.incomingBlocksByTx, tx)
+			zap.S().Debugf("Killing: %v", tx)
 		}
 	}
 
@@ -268,6 +278,9 @@ func (odb *OverlineDB) addBlockUnsafe(block *p2p_pb.BcBlock) {
 	if _, ok := odb.incomingBlocks[block.GetHash()]; !ok {
 		odb.incomingBlocks[block.GetHash()] = block
 		odb.incomingBlocksByHeight[block.GetHeight()] = block.GetHash()
+		for _, tx := range block.GetTxs() {
+			odb.incomingBlocksByTx[tx.GetHash()] = block.GetHash()
+		}
 		if odb.highestBlock == nil && block.GetHeight() == 1 {
 			odb.highestBlock = block
 		} else {
@@ -404,7 +417,6 @@ func (odb *OverlineDB) GetBlockByHeight(blockHeight uint64) (*p2p_pb.BcBlock, er
 			block, ok1 = odb.incomingBlocks[blockHash]
 		}
 		// toSerialize (also needs lock)
-		// FIXME - this needs to be better than a linear search
 		if !ok1 {
 			idx := sort.Search(len(odb.toSerialize), func(i int) bool { return odb.toSerialize[i].GetHeight() >= blockHeight })
 			if idx < len(odb.toSerialize) && odb.toSerialize[idx].GetHeight() == blockHeight {
@@ -429,6 +441,67 @@ func (odb *OverlineDB) GetBlockByHeight(blockHeight uint64) (*p2p_pb.BcBlock, er
 				return nil, err
 			}
 			block, err = odb.GetBlockByHash(hashBytes)
+		}
+		if err == nil {
+			odb.lookupCache.Add(blockHeight, block)
+			odb.lookupCache.Add(block.GetHash(), block)
+			for _, tx := range block.GetTxs() {
+				odb.lookupCache.Add(tx.GetHash(), block)
+			}
+		}
+	}
+	return block, err
+}
+
+func (odb *OverlineDB) GetBlockByTx(txHash []byte) (*p2p_pb.BcBlock, error) {
+	txString := hex.EncodeToString(txHash)
+	tryblock, ok1 := odb.lookupCache.Get(txString)
+	block, ok2 := tryblock.(*p2p_pb.BcBlock)
+	var err error = nil
+	if !(ok1 && ok2) {
+		// three places to look for a block:
+		// incomingBlocks (needs lock)
+		odb.mu.Lock()
+		blockHash, ok1 := odb.incomingBlocksByTx[txString]
+		if ok1 {
+			block, ok1 = odb.incomingBlocks[blockHash]
+		}
+		// toSerialize (also needs lock)
+		// FIXME - this needs to be better than a linear search
+		if !ok1 {
+			for _, blk := range odb.toSerialize {
+				for _, tx := range blk.GetTxs() {
+					if tx.GetHash() == txString {
+						ok1 = true
+						block = blk
+						break
+					}
+				}
+				if ok1 {
+					break
+				}
+			}
+		}
+		odb.mu.Unlock()
+		if !ok1 {
+			hashBytes := make([]byte, 0)
+			err := odb.db.View(func(tx *bolt.Tx) error {
+				tx2hash := tx.Bucket(OverlineTxToHashMap)
+				hashBytes = tx2hash.Get(txHash)
+				if len(hashBytes) == 0 {
+					return errors.New(fmt.Sprintf("Could not find tx %v!", txHash))
+				}
+				return nil
+			})
+			if err != nil {
+				return nil, err
+			}
+			block, err = odb.GetBlockByHash(hashBytes)
+		}
+		if err == nil {
+			odb.lookupCache.Add(txHash, block)
+			odb.lookupCache.Add(block.GetHeight(), block)
+			odb.lookupCache.Add(block.GetHash(), block)
 		}
 	}
 	return block, err
@@ -464,6 +537,10 @@ func (odb *OverlineDB) GetBlockByHash(blockHash []byte) (*p2p_pb.BcBlock, error)
 			}
 		}
 		odb.lookupCache.Add(blockHashString, block)
+		odb.lookupCache.Add(block.GetHeight(), block)
+		for _, tx := range block.GetTxs() {
+			odb.lookupCache.Add(tx.GetHash(), block)
+		}
 	}
 	return block, nil
 }
@@ -688,6 +765,9 @@ func (odb *OverlineDB) runSerialization() {
 		odb.toSerialize = append(odb.toSerialize, newBlock)
 		delete(odb.incomingBlocks, hash)
 		delete(odb.incomingBlocksByHeight, newBlock.GetHeight())
+		for _, tx := range newBlock.GetTxs() {
+			delete(odb.incomingBlocksByTx, tx.GetHash())
+		}
 	}
 	sort.SliceStable(odb.toSerialize, func(i, j int) bool {
 		return common.BlockOrderingRule(odb.toSerialize[i], odb.toSerialize[j])
@@ -708,6 +788,9 @@ func (odb *OverlineDB) runSerialization() {
 		for _, block := range odb.toSerialize[odb.Config.AncientChunkSize:] {
 			odb.incomingBlocks[block.GetHash()] = block
 			odb.incomingBlocksByHeight[block.GetHeight()] = block.GetHash()
+			for _, tx := range block.GetTxs() {
+				odb.incomingBlocksByTx[tx.GetHash()] = block.GetHash()
+			}
 		}
 		odb.toSerialize = make([]*p2p_pb.BcBlock, 0, 10*odb.Config.AncientChunkSize)
 	}
