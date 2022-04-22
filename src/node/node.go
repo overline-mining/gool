@@ -66,6 +66,7 @@ var (
 	httpEnable          = flag.Bool("http", false, "Enable JSON-RPC over HTTP.")
 	httpAddr            = flag.String("http.addr", "localhost", "The address bound to the HTTP JSON-RPC server.")
 	httpPort            = flag.Int("http.port", 4712, "The port to listen on for the HTTP JSON-RPC server.")
+	httpVhosts          = flag.String("http.vhosts", "", "allowed vhosts for accessing HTTP JSON-RPC server.")
 )
 
 type ConcurrentPeerMap struct {
@@ -378,7 +379,7 @@ func main() {
 
 	if *httpEnable {
 		go func() {
-			err := http.ListenAndServe(fmt.Sprintf("%v:%v", *httpAddr, *httpPort), rpcServer)
+			err := http.ListenAndServe(fmt.Sprintf("%v:%v", *httpAddr, *httpPort), rpc.NewHTTPHandlerStack(rpcServer, []string{}, []string{*httpVhosts}, []byte{}))
 			zap.S().Error(err)
 		}()
 	}
