@@ -27,6 +27,13 @@ type HeadInformation struct {
 	HasDB        bool
 }
 
+type ProgressInfo struct {
+	Done                   bool
+	StartingBlock          *p2p_pb.BcBlock
+	CurrentBlock           *p2p_pb.BcBlock
+	HighestPeerBlockHeight uint64
+}
+
 type OverlineBlockchainConfig struct {
 	DisjointCheckupDepth  int `json:"disjoint_checkup_depth"`  // if there is a chain segment not connected to db, how long does it have to be to ask to go look for blocks to try to connect?
 	DisjointCheckupHeight int `json:"disjoint_checkup_height"` // if any chain segment not connected to db is higher by this number of blocks, investigate it
@@ -478,4 +485,25 @@ func (obc *OverlineBlockchain) GetHighestBlock() (*p2p_pb.BcBlock, error) {
 	}
 
 	return block, err
+}
+
+func (obc *OverlineBlockchain) SyncProgress() ProgressInfo {
+	isSyncing := obc.DB.IsInitialBlockDownload()
+
+	var currentBlock *p2p_pb.BcBlock = nil
+
+	if isSyncing {
+		currentBlock = obc.DB.HighestBlock()
+	} else {
+		obc.Mu.Lock()
+		currentBlock = obc.currentHighestBlock
+		obc.Mu.Unlock()
+	}
+
+	return ProgressInfo{
+		Done:                   !isSyncing,
+		StartingBlock:          obc.DB.GetSyncStartingBlock(),
+		CurrentBlock:           currentBlock,
+		HighestPeerBlockHeight: uint64(0),
+	}
 }

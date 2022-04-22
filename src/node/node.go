@@ -364,7 +364,10 @@ func main() {
 	blockchainService := new(rpc.BlockchainService)
 	blockchainService.Chain = &goolChain
 
+	adminService := new(rpc.AdminService)
+
 	rpcServer.RegisterName("ovl", blockchainService)
+	rpcServer.RegisterName("admin", adminService)
 
 	var ipcRpcListener net.Listener
 	if !*ipcDisable {

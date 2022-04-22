@@ -52,6 +52,20 @@ func (s *BlockchainService) GetTxByHash(txHash string) (p2p_pb.Transaction, erro
 	return *tx, err
 }
 
+func (s *BlockchainService) Syncing() (interface{}, error) {
+	progress := s.Chain.SyncProgress()
+
+	if progress.Done {
+		return false, nil
+	}
+
+	return map[string]interface{}{
+		"startingBlock": progress.StartingBlock.GetHeight(),
+		"currentBlock":  progress.CurrentBlock.GetHeight(),
+		"highestBlock":  progress.HighestPeerBlockHeight,
+	}, nil
+}
+
 func (s *BlockchainService) GetHighestBlock() (p2p_pb.BcBlock, error) {
 	block, err := s.Chain.GetHighestBlock()
 	if err != nil {

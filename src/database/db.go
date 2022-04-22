@@ -85,6 +85,7 @@ type OverlineDB struct {
 	ibdMu                  sync.Mutex
 	ibdMode                bool              // Initial Block Download mode
 	multiplexPeers         bool              // when in IBD how to we query blocks from peers (stripe over peers (true) or request the same blocks from each (false))
+	syncStartingBlock      *p2p_pb.BcBlock   // the block we started syncing from in this run of gool
 	tipOfSerializedChain   *p2p_pb.BcBlock   // the highest, main-chain serialized block
 	highestBlock           *p2p_pb.BcBlock   // the highest block awaiting serialization
 	toSerialize            []*p2p_pb.BcBlock // sorted ascending in block height
@@ -225,6 +226,7 @@ func (odb *OverlineDB) Open(filepath string, dropChainstate bool, pruneDatabaseT
 	} else {
 		zap.S().Infof("Recovered last serialized block    : %v -> %v", common.BriefHash(odb.tipOfSerializedChain.GetHash()), odb.tipOfSerializedChain.GetHeight())
 		zap.S().Infof("Recovered highest contiguous block : %v -> %v", common.BriefHash(odb.highestBlock.GetHash()), odb.highestBlock.GetHeight())
+		odb.syncStartingBlock = odb.highestBlock
 	}
 
 	if odb.tipOfSerializedChain != nil {
@@ -967,4 +969,8 @@ func (odb *OverlineDB) deleteBlocksAfter(pruneChainTo uint64) error {
 		return nil
 	})
 	return err
+}
+
+func (odb *OverlineDB) GetSyncStartingBlock() *p2p_pb.BcBlock {
+	return odb.syncStartingBlock
 }
