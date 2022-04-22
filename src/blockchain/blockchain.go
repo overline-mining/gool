@@ -7,9 +7,9 @@ import (
 	"github.com/overline-mining/gool/src/database"
 	//"github.com/overline-mining/gool/src/validation"
 	"encoding/hex"
+	"errors"
 	p2p_pb "github.com/overline-mining/gool/src/protos"
 	"go.uber.org/zap"
-	"math/big"
 	"sort"
 	"sync"
 )
@@ -19,15 +19,32 @@ const (
 	CONNECTION_TYPE = "connects"
 )
 
+type HeadInformation struct {
+	Hash         string
+	Depth        uint64
+	LowestBlock  *p2p_pb.BcBlock
+	HighestBlock *p2p_pb.BcBlock
+	HasDB        bool
+}
+
+type ProgressInfo struct {
+	Done                   bool
+	StartingBlock          *p2p_pb.BcBlock
+	CurrentBlock           *p2p_pb.BcBlock
+	HighestPeerBlockHeight uint64
+}
+
 type OverlineBlockchainConfig struct {
-	DisjointCheckupDepth int `json:"disjoint_checkup_depth"` // if there is a chain segment not connected to db, how long does it have to be to ask to go look for blocks to try to connect?
-	DisplayDepth         int `json:"display_depth"`          // only show chains of this length or longer
+	DisjointCheckupDepth  int `json:"disjoint_checkup_depth"`  // if there is a chain segment not connected to db, how long does it have to be to ask to go look for blocks to try to connect?
+	DisjointCheckupHeight int `json:"disjoint_checkup_height"` // if any chain segment not connected to db is higher by this number of blocks, investigate it
+	DisplayDepth          int `json:"display_depth"`           // only show chains of this length or longer
 }
 
 func DefaultOverlineBlockchainConfig() OverlineBlockchainConfig {
 	return OverlineBlockchainConfig{
-		DisjointCheckupDepth: 10,
-		DisplayDepth:         10,
+		DisjointCheckupDepth:  10,
+		DisjointCheckupHeight: 20,
+		DisplayDepth:          10,
 	}
 }
 
@@ -38,6 +55,8 @@ type OverlineBlockchain struct {
 	followMu                         sync.Mutex
 	Heads                            map[string]bool
 	HeadsToCheck                     map[string]uint64
+	currentHighestBlock              *p2p_pb.BcBlock
+	currentHighestNode               *dagger.Node
 	BlockGraph                       *dagger.Graph
 	DB                               *database.OverlineDB
 	isFollowingChain                 bool
@@ -89,7 +108,7 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 		testHashBytes, err := hex.DecodeString(block.GetHash())
 		var testDbBlock *p2p_pb.BcBlock
 		if err == nil {
-			testDbBlock, err = obc.DB.GetBlock(testHashBytes)
+			testDbBlock, err = obc.DB.GetBlockByHash(testHashBytes)
 		}
 		if err == nil && testDbBlock.GetHash() == block.GetHash() {
 			return
@@ -196,6 +215,9 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 	// add the highest popped head to the chain
 	// if the head is longer than the checkup depth and not connected to database
 	// add to checkup list and grab blocks from all to see if it can be sorted out
+	// mark the head with the longest chain and the head with the highest chain
+	longestHeadWithDB := HeadInformation{Hash: "", Depth: uint64(0), LowestBlock: nil, HighestBlock: nil, HasDB: false}
+	highestHead := HeadInformation{Hash: "", Depth: uint64(0), LowestBlock: nil, HighestBlock: nil, HasDB: false}
 	for {
 		poppedHeadsMap := make(map[string]*p2p_pb.BcBlock)
 		poppedHeads := make([]*p2p_pb.BcBlock, 0)
@@ -214,19 +236,8 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 			highestBlock := headNode.Attributes["block"].(*p2p_pb.BcBlock)
 			obc.BlockGraph.DFS(CONNECTION_TYPE, headNode.Path, func(node dagger.Node) bool {
 				blk := node.Attributes["block"].(*p2p_pb.BcBlock)
-				if blk.GetHeight() > highestBlock.GetHeight() {
+				if common.BlockOrderingRule(highestBlock, blk) {
 					highestBlock = blk
-				} else if blk.GetHeight() == blk.GetHeight() {
-					highestDist, _ := new(big.Int).SetString(highestBlock.GetTotalDistance(), 10)
-					blkDist, _ := new(big.Int).SetString(blk.GetTotalDistance(), 10)
-					compare := blkDist.Cmp(highestDist)
-					if compare == 0 {
-						if blk.GetTimestamp() < highestBlock.GetTimestamp() {
-							highestBlock = blk
-						}
-					} else if compare > 0 {
-						highestBlock = blk
-					}
 				}
 				return true
 			})
@@ -234,7 +245,7 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 			hashBytes, err := hex.DecodeString(headBlock.GetPreviousHash())
 			var dbBlock *p2p_pb.BcBlock
 			if err == nil {
-				dbBlock, err = obc.DB.GetBlock(hashBytes)
+				dbBlock, err = obc.DB.GetBlockByHash(hashBytes)
 			}
 			if highestBlock != nil {
 				hasDB := false
@@ -276,6 +287,7 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 						heads[e.To.XID] = true
 						return true
 					})
+
 					obc.BlockGraph.DelNode(headNode.Path)
 					delete(heads, hash)
 					poppedHeadsMap[headBlock.GetHash()] = headBlock
@@ -288,8 +300,40 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 					}
 					obc.CheckupMu.Unlock()
 				}
+				if (hasDB || poppedParent) &&
+					(longestHeadWithDB.LowestBlock == nil ||
+						common.BlockOrderingRule(longestHeadWithDB.LowestBlock, headBlock) ||
+						blockDepth > longestHeadWithDB.Depth) {
+					longestHeadWithDB.Hash = hash
+					longestHeadWithDB.Depth = blockDepth
+					longestHeadWithDB.LowestBlock = headBlock
+					longestHeadWithDB.HighestBlock = highestBlock
+					longestHeadWithDB.HasDB = true
+				}
+
+				if highestHead.LowestBlock == nil || common.BlockOrderingRule(highestHead.HighestBlock, highestBlock) {
+					highestHead.Hash = hash
+					highestHead.Depth = blockDepth
+					highestHead.LowestBlock = headBlock
+					highestHead.HighestBlock = highestBlock
+					highestHead.HasDB = (hasDB || poppedParent)
+				}
 			}
 
+		}
+
+		if longestHeadWithDB.LowestBlock != nil {
+			obc.Mu.Lock()
+			obc.currentHighestBlock = longestHeadWithDB.HighestBlock
+			obc.Mu.Unlock()
+			if highestHead.LowestBlock != nil && !highestHead.HasDB {
+				heightDiff := highestHead.HighestBlock.GetHeight() - longestHeadWithDB.HighestBlock.GetHeight()
+				if heightDiff > uint64(obc.Config.DisjointCheckupHeight) {
+					obc.CheckupMu.Lock()
+					obc.HeadsToCheck[highestHead.LowestBlock.GetHash()] = highestHead.LowestBlock.GetHeight()
+					obc.CheckupMu.Unlock()
+				}
+			}
 		}
 
 		for _, blk := range poppedHeadsMap {
@@ -298,16 +342,7 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 
 		//finally stick the best popped head in the database, the others perish
 		sort.SliceStable(poppedHeads, func(i, j int) bool {
-			if poppedHeads[i].GetHeight() == poppedHeads[j].GetHeight() {
-				iDist, _ := new(big.Int).SetString(poppedHeads[i].GetTotalDistance(), 10)
-				jDist, _ := new(big.Int).SetString(poppedHeads[j].GetTotalDistance(), 10)
-				compare := iDist.Cmp(jDist)
-				if compare == 0 {
-					return poppedHeads[i].GetTimestamp() < poppedHeads[j].GetTimestamp()
-				}
-				return compare < 0
-			}
-			return poppedHeads[i].GetHeight() < poppedHeads[j].GetHeight()
+			return common.BlockOrderingRule(poppedHeads[i], poppedHeads[j])
 		})
 
 		if len(poppedHeads) > 0 {
@@ -335,5 +370,140 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 func (obc *OverlineBlockchain) AddBlockRange(blocks *p2p_pb.BcBlocks) {
 	for _, block := range blocks.Blocks {
 		obc.AddBlock(block)
+	}
+}
+
+func (obc *OverlineBlockchain) GetBlockByHash(hash string) (*p2p_pb.BcBlock, error) {
+	var block *p2p_pb.BcBlock = nil
+	var err error = nil
+	var hashBytes []byte
+	node, found := obc.BlockGraph.GetNode(
+		dagger.Path{
+			XID:   hash,
+			XType: BLOCK_TYPE,
+		})
+	if found {
+		block = node.Attributes["block"].(*p2p_pb.BcBlock)
+	} else {
+		hashBytes, err = hex.DecodeString(hash)
+		if err != nil {
+			return block, err
+		}
+		block, err = obc.DB.GetBlockByHash(hashBytes)
+	}
+	return block, err
+}
+
+func (obc *OverlineBlockchain) GetBlockByHeight(height uint64) (*p2p_pb.BcBlock, error) {
+	var block *p2p_pb.BcBlock = nil
+	var err error = nil
+
+	obc.Mu.Lock()
+	defer obc.Mu.Unlock()
+	highestHash := obc.currentHighestBlock.GetHash()
+	highestHeight := obc.currentHighestBlock.GetHeight()
+	if highestHeight == height {
+		return obc.currentHighestBlock, nil
+	}
+
+	if highestHeight < height {
+		return block, errors.New("Requested height exceeds chain height!")
+	}
+
+	highestNode, _ := obc.BlockGraph.GetNode(
+		dagger.Path{
+			XID:   highestHash,
+			XType: BLOCK_TYPE,
+		})
+	// walk back from the current best block and find the block with requested height
+	// ignore other paths in tree
+	obc.BlockGraph.ReverseDFS(CONNECTION_TYPE, highestNode.Path, func(node dagger.Node) bool {
+		blk := node.Attributes["block"].(*p2p_pb.BcBlock)
+		if blk.GetHeight() == height {
+			zap.S().Infof("found height %v == %v", blk.GetHeight(), height)
+			block = blk
+		}
+		return true
+	})
+	if block == nil {
+		block, err = obc.DB.GetBlockByHeight(height)
+	}
+	return block, err
+}
+
+func (obc *OverlineBlockchain) GetBlockByTx(txHash string) (*p2p_pb.BcBlock, error) {
+	var block *p2p_pb.BcBlock = nil
+	var err error = nil
+
+	txHashBytes, err := hex.DecodeString(txHash)
+
+	if err != nil {
+		return block, err
+	}
+
+	obc.Mu.Lock()
+	highestHash := obc.currentHighestBlock.GetHash()
+	obc.Mu.Unlock()
+
+	highestNode, _ := obc.BlockGraph.GetNode(
+		dagger.Path{
+			XID:   highestHash,
+			XType: BLOCK_TYPE,
+		})
+	// walk back from the current best block and find the block with requested tx
+	// ignore other paths in tree
+	obc.BlockGraph.ReverseDFS(CONNECTION_TYPE, highestNode.Path, func(node dagger.Node) bool {
+		blk := node.Attributes["block"].(*p2p_pb.BcBlock)
+		if block == nil {
+			for _, tx := range blk.GetTxs() {
+				if tx.GetHash() == txHash {
+					block = blk
+				}
+			}
+		}
+		return true
+	})
+	if block == nil {
+		block, err = obc.DB.GetBlockByTx(txHashBytes)
+	}
+	return block, err
+}
+
+func (obc *OverlineBlockchain) GetHighestBlock() (*p2p_pb.BcBlock, error) {
+	var block *p2p_pb.BcBlock = nil
+	var err error = nil
+
+	obc.Mu.Lock()
+	defer obc.Mu.Unlock()
+	if obc.currentHighestBlock != nil {
+		return obc.currentHighestBlock, nil
+	}
+
+	block = obc.DB.HighestBlock()
+	if block == nil {
+		err = errors.New("No highest block defined yet!")
+	}
+
+	return block, err
+}
+
+func (obc *OverlineBlockchain) SyncProgress() ProgressInfo {
+	isSyncing := obc.DB.IsInitialBlockDownload()
+
+	var currentBlock *p2p_pb.BcBlock = nil
+
+	if isSyncing {
+		currentBlock = obc.DB.HighestBlock()
+	} else {
+		obc.Mu.Lock()
+		currentBlock = obc.currentHighestBlock
+		obc.Mu.Unlock()
+	}
+
+	return ProgressInfo{
+		Done:                   !isSyncing,
+		StartingBlock:          obc.DB.GetSyncStartingBlock(),
+		CurrentBlock:           currentBlock,
+		HighestPeerBlockHeight: uint64(0),
 	}
 }
