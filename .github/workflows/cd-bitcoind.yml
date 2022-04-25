@@ -3,6 +3,8 @@ name: deploy bitcoind docker image
 on:
   workflow_dispatch:
   push:
+    branch:
+    - 'main'
     paths:
     - 'docker/Dockerfile.bitcoin-core'
 
