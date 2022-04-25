@@ -5,8 +5,8 @@ on:
   push:
     branch:
     - 'main'
-      paths:
-      - 'docker/Dockerfile.bitcoin-core'
+    paths:
+    - 'docker/Dockerfile.bitcoin-core'
 
 jobs:
   bitcoind:
