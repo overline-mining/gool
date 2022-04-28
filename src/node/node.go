@@ -330,10 +330,7 @@ func main() {
 		err = gooldb.AddBlock(gblock)
 	}
 
-	startingHeight = gooldb.SerializedHeight()
-	if startingHeight == 0 {
-		startingHeight = gooldb.HighestBlockHeight()
-	}
+	startingHeight = gooldb.HighestBlockHeight()
 
 	defer gooldb.Close()
 
@@ -619,9 +616,11 @@ func main() {
 							olHandlerMapMu.Lock()
 							msgHandler := olMessageHandlers[peerIDHex]
 							msgHandler.Peer.Height = b.GetHeight()
+							lclAddr := msgHandler.Peer.Conn.LocalAddr()
+							rmtAddr := msgHandler.Peer.Conn.RemoteAddr()
 							olMessageHandlers[peerIDHex] = msgHandler
 							olHandlerMapMu.Unlock()
-							zap.S().Debugf("Received Valid BLOCK: Set Height of %v to %v", peerIDHex, b.GetHeight())
+							zap.S().Debugf("Received Valid BLOCK: Set Height of %v to %v (%v <- %v)", common.BriefHash(peerIDHex), b.GetHeight(), lclAddr, rmtAddr)
 							if goolChain.IsFollowingChain() {
 								goolChain.AddBlock(b)
 							}
@@ -642,6 +641,44 @@ func main() {
 						zap.S().Debugf("Received broadcasted TX %v from %v", tx.GetHash(), peerIDHex)
 						if !gooldb.IsInitialBlockDownload() {
 							gooldb.AddTransaction(tx)
+						}
+					case messages.GET_BLOCK:
+					        peerIDHex := hex.EncodeToString(oneMessage.PeerID)
+					        olHandlerMapMu.Lock()
+                                                msgHandler := olMessageHandlers[peerIDHex]
+                                                lclAddr := msgHandler.Peer.Conn.LocalAddr()
+                                                rmtAddr := msgHandler.Peer.Conn.RemoteAddr()
+						olHandlerMapMu.Unlock()
+					        zap.S().Infof("GET_BLOCK -> %v (%v <- %v)", peerIDHex, string(oneMessage.Value), lclAddr, rmtAddr)
+					case messages.GET_DATA:
+					        peerIDHex := hex.EncodeToString(oneMessage.PeerID)
+					        olHandlerMapMu.Lock()
+						msgHandler := olMessageHandlers[peerIDHex]
+						lclAddr := msgHandler.Peer.Conn.LocalAddr()
+	                                        rmtAddr := msgHandler.Peer.Conn.RemoteAddr()
+						olHandlerMapMu.Unlock()
+						blockRange := bytes.Split(oneMessage.Value, []byte(messages.SEPARATOR))
+						low := uint64(0)
+						high := uint64(0)
+						if len(blockRange) == 2 {
+						  var lowErr error = nil
+						  var highErr error = nil
+						  low, lowErr = strconv.ParseUint(strings.Trim(string(blockRange[0]), "\""), 10, 64)
+						  high, highErr = strconv.ParseUint(strings.Trim(string(blockRange[1]), "\""), 10, 64)
+						  if lowErr != nil || highErr != nil {
+						    zap.S().Error("Could not parse given block range: %v -> %v", blockRange[0], blockRange[1])
+						    continue
+						  }
+						}
+					        zap.S().Infof("GET_DATA %v -> %v-%v (%v <- %v)", peerIDHex, low, high, lclAddr, rmtAddr)
+						highestBlock, err := goolChain.GetHighestBlock()
+						if err != nil {
+						  zap.S().Error(err)
+						  continue
+						}
+						if highestBlock.GetHeight() < high {
+						  zap.S().Infof("Truncating request %v to highest available block: %v", high, highestBlock.GetHeight())
+						  high = highestBlock.GetHeight()
 						}
 					default:
 						zap.S().Debugf("Throwing away: %v->%v", hex.EncodeToString(oneMessage.PeerID), oneMessage.Type)
@@ -671,7 +708,7 @@ func main() {
 			olHandlerMapMu.Unlock()
 			for _, messageHandler := range localHandlers {
 				high := uint64((iStride+1)*blockStride) + startingHeight + 1
-				if high < messageHandler.Peer.Height && messageHandler.Peer.Height-high <= uint64(gooldb.Config.AncientChunkSize) {
+				if high < messageHandler.Peer.Height && messageHandler.Peer.Height-high <= uint64(10*gooldb.Config.AncientChunkSize) {
 					gooldb.UnSetMultiplexPeers()
 				}
 			}
@@ -717,7 +754,8 @@ func main() {
 
 				if gooldb.IsMultiplexPeers() {
 					iStride += 1
-					if iStride%100 == 0 { // if we've submitted a request for 1000 blocks - wait until we have received them all
+					}
+					if iStride%100 == 0 && iStride != 0 { // if we've submitted a request for 1000 blocks - wait until we have received them all
 						zap.S().Debugf("Submitted block requests for range [%v,%v]", startingHeight+(iStride-100)*blockStride, startingHeight+iStride*blockStride)
 						for {
 							ibdWorkList.Mu.Lock()
@@ -731,7 +769,7 @@ func main() {
 							}
 						}
 					}
-				}
+				
 
 				topRange = uint64(startingHeight + (iStride+1)*blockStride + 1)
 			}
@@ -865,7 +903,7 @@ func handshake_peer(conn net.Conn, id []byte, buf *[0xa00000]byte) ([]byte, int,
 
 	copy(buf[0:], buf[cursor:ntot])
 
-	return peerHandshake[1:lenPeer], int(ntot - int(cursor)), nil
+	return peerHandshake[1:lenPeer+1], int(ntot - int(cursor)), nil
 }
 
 func getNtp(ctx context.Context) (types.Time, error) {

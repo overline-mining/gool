@@ -474,10 +474,12 @@ func (obc *OverlineBlockchain) GetHighestBlock() (*p2p_pb.BcBlock, error) {
 	var err error = nil
 
 	obc.Mu.Lock()
-	defer obc.Mu.Unlock()
 	if obc.currentHighestBlock != nil {
-		return obc.currentHighestBlock, nil
+	        block = obc.currentHighestBlock
+	        obc.Mu.Unlock()
+		return block, nil
 	}
+	obc.Mu.Unlock()
 
 	block = obc.DB.HighestBlock()
 	if block == nil {
