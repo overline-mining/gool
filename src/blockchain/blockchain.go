@@ -400,31 +400,36 @@ func (obc *OverlineBlockchain) GetBlockByHeight(height uint64) (*p2p_pb.BcBlock,
 
 	obc.Mu.Lock()
 	defer obc.Mu.Unlock()
-	highestHash := obc.currentHighestBlock.GetHash()
-	highestHeight := obc.currentHighestBlock.GetHeight()
-	if highestHeight == height {
-		return obc.currentHighestBlock, nil
-	}
+	highestBlock := obc.currentHighestBlock
 
-	if highestHeight < height {
-		return block, errors.New("Requested height exceeds chain height!")
-	}
+	if highestBlock != nil {
+		highestHash := highestBlock.GetHash()
+		highestHeight := highestBlock.GetHeight()
 
-	highestNode, _ := obc.BlockGraph.GetNode(
-		dagger.Path{
-			XID:   highestHash,
-			XType: BLOCK_TYPE,
-		})
-	// walk back from the current best block and find the block with requested height
-	// ignore other paths in tree
-	obc.BlockGraph.ReverseDFS(CONNECTION_TYPE, highestNode.Path, func(node dagger.Node) bool {
-		blk := node.Attributes["block"].(*p2p_pb.BcBlock)
-		if blk.GetHeight() == height {
-			zap.S().Infof("found height %v == %v", blk.GetHeight(), height)
-			block = blk
+		if highestHeight == height {
+			return obc.currentHighestBlock, nil
 		}
-		return true
-	})
+
+		if highestHeight < height {
+			return block, errors.New("Requested height exceeds chain height!")
+		}
+
+		highestNode, _ := obc.BlockGraph.GetNode(
+			dagger.Path{
+				XID:   highestHash,
+				XType: BLOCK_TYPE,
+			})
+		// walk back from the current best block and find the block with requested height
+		// ignore other paths in tree
+		obc.BlockGraph.ReverseDFS(CONNECTION_TYPE, highestNode.Path, func(node dagger.Node) bool {
+			blk := node.Attributes["block"].(*p2p_pb.BcBlock)
+			if blk.GetHeight() == height {
+				zap.S().Debugf("Found height in block tree: %v == %v", blk.GetHeight(), height)
+				block = blk
+			}
+			return true
+		})
+	}
 	if block == nil {
 		block, err = obc.DB.GetBlockByHeight(height)
 	}
@@ -475,8 +480,8 @@ func (obc *OverlineBlockchain) GetHighestBlock() (*p2p_pb.BcBlock, error) {
 
 	obc.Mu.Lock()
 	if obc.currentHighestBlock != nil {
-	        block = obc.currentHighestBlock
-	        obc.Mu.Unlock()
+		block = obc.currentHighestBlock
+		obc.Mu.Unlock()
 		return block, nil
 	}
 	obc.Mu.Unlock()

@@ -56,6 +56,7 @@ var (
 	limitAllConnections = flag.Uint("limit-connections", 60, "Total limit of network connections, both inbound and outbound. Divided in half to limit each direction. Default value is 60.")
 	dbFileDescriptors   = flag.Int("db-file-descriptors", 500, "Maximum allowed file descriptors count that will be used by state database. Default value is 500.")
 	olTestPeer          = flag.String("test-peer", "", "Specify an exact peer (ip:port) to connect to instead of using tracker")
+	ipBlackList         = flag.String("black-list", "", "Specify a comma separate list of IPs to never connect to")
 	olWorkDir           = flag.String("ol-workdir", ".overline", "Specify the working directory for the node")
 	dbFileName          = flag.String("db-file-name", "overline.boltdb", "The file we're going to write the blockchain to within olWorkDir")
 	validateFullChain   = flag.Bool("full-validation", false, "Run a slow but complete validation of your local blockchain DB")
@@ -108,13 +109,13 @@ type OverlineMessageHandler struct {
 	buflen   int
 }
 
-func (mh *OverlineMessageHandler) Initialize(conn net.Conn) {
+func (mh *OverlineMessageHandler) Initialize(conn net.Conn, starter, genesis *p2p_pb.BcBlock) {
 	//mh.Mu.Lock()
 	//defer mh.Mu.Unlock()
 
 	mh.buflen = 0
 
-	peer_id, nbuf, err := handshake_peer(conn, mh.ID, &mh.buf)
+	peer_id, nbuf, err := handshake_peer(conn, mh.ID, starter, genesis, &mh.buf)
 	mh.buflen = nbuf
 	if err != nil {
 		zap.S().Debugf("Failed to connect to %v: %v", hex.EncodeToString(peer_id), err)
@@ -298,6 +299,15 @@ func main() {
 	err = os.MkdirAll(*olWorkDir, 0700)
 	checkError(err)
 
+	// setup blacklist
+	badPeers := make(map[string]bool)
+	if len(*ipBlackList) > 0 {
+		for _, badPeer := range strings.Split(*ipBlackList, ",") {
+			zap.S().Debugf("Adding %v to blacklist", badPeer)
+			badPeers[badPeer] = true
+		}
+	}
+
 	// database testing
 	startingHeight := uint64(0)
 	dbFilePath := filepath.Join(*olWorkDir, *dbFileName)
@@ -330,7 +340,13 @@ func main() {
 		err = gooldb.AddBlock(gblock)
 	}
 
-	startingHeight = gooldb.HighestBlockHeight()
+	genesisBlock, err := gooldb.GetBlockByHeight(uint64(1))
+	if err != nil {
+		zap.S().Panic("Couldn't get genesis block!")
+	}
+
+	startingHighestBlock := gooldb.HighestBlock()
+	startingHeight = startingHighestBlock.GetHeight()
 
 	defer gooldb.Close()
 
@@ -418,7 +434,12 @@ func main() {
 					if err == nil {
 						zap.S().Debugf("%v has %v peers!", tr, len(resp.Peers))
 						for _, peer := range resp.Peers {
-							allPeers.AddPeer(fmt.Sprintf("%v", peer), peer)
+							ipString := fmt.Sprintf("%v", peer.IP)
+							if _, ok := badPeers[ipString]; !ok {
+								allPeers.AddPeer(fmt.Sprintf("%v", peer), peer)
+							} else {
+								zap.S().Debugf("Skipping black-listed peer %v", peer.IP)
+							}
 						}
 					} else {
 						zap.S().Error(err)
@@ -513,7 +534,7 @@ func main() {
 			}
 
 			handler := OverlineMessageHandler{Mu: &olMessageMu, Messages: &olMessages, ID: id_bytes}
-			handler.Initialize(conn)
+			handler.Initialize(conn, startingHighestBlock, genesisBlock)
 			go handler.Run()
 			olHandlerMapMu.Lock()
 			olMessageHandlers[hex.EncodeToString(handler.Peer.ID)] = handler
@@ -571,7 +592,7 @@ func main() {
 						blocks := p2p_pb.BcBlocks{}
 						err = proto.Unmarshal(oneMessage.Value, &blocks)
 						if err == nil && len(blocks.Blocks) > 0 {
-							zap.S().Debugf("Got blocklist with starting value: %v %v", blocks.Blocks[0].GetHeight(), blocks.Blocks[0].GetHash())
+							zap.S().Debugf("Got blocklist of length %v with starting value: %v %v", len(blocks.Blocks), blocks.Blocks[0].GetHeight(), blocks.Blocks[0].GetHash())
 						}
 						if gooldb.IsInitialBlockDownload() {
 							goodBlocks := p2p_pb.BcBlocks{}
@@ -587,12 +608,12 @@ func main() {
 									ibdWorkList.AllowedBlocks[block.GetHeight()] = nreqs
 									if nreqs == 0 {
 										delete(ibdWorkList.AllowedBlocks, block.GetHeight())
+										ibdBar.Add(1)
 									}
 								}
 							}
 							ibdWorkList.Mu.Unlock()
 							blocks = goodBlocks
-							ibdBar.Add(len(blocks.Blocks))
 							if highestNonZeroPeerHeight != 0 && highestNonZeroPeerHeight-10 < highestReceivedBlock {
 								gooldb.UnSetInitialBlockDownload()
 							}
@@ -619,6 +640,14 @@ func main() {
 							lclAddr := msgHandler.Peer.Conn.LocalAddr()
 							rmtAddr := msgHandler.Peer.Conn.RemoteAddr()
 							olMessageHandlers[peerIDHex] = msgHandler
+
+							for aPeerID, aHandler := range olMessageHandlers {
+								if aPeerID != peerIDHex && aHandler.Peer.Height > 0 && aHandler.Peer.Height < b.GetHeight() {
+									sendBlockBytes(msgHandler.Peer.Conn, oneMessage.Value)
+									checkError(err)
+								}
+							}
+
 							olHandlerMapMu.Unlock()
 							zap.S().Debugf("Received Valid BLOCK: Set Height of %v to %v (%v <- %v)", common.BriefHash(peerIDHex), b.GetHeight(), lclAddr, rmtAddr)
 							if goolChain.IsFollowingChain() {
@@ -643,43 +672,101 @@ func main() {
 							gooldb.AddTransaction(tx)
 						}
 					case messages.GET_BLOCK:
-					        peerIDHex := hex.EncodeToString(oneMessage.PeerID)
-					        olHandlerMapMu.Lock()
-                                                msgHandler := olMessageHandlers[peerIDHex]
-                                                lclAddr := msgHandler.Peer.Conn.LocalAddr()
-                                                rmtAddr := msgHandler.Peer.Conn.RemoteAddr()
-						olHandlerMapMu.Unlock()
-					        zap.S().Infof("GET_BLOCK -> %v (%v <- %v)", peerIDHex, string(oneMessage.Value), lclAddr, rmtAddr)
-					case messages.GET_DATA:
-					        peerIDHex := hex.EncodeToString(oneMessage.PeerID)
-					        olHandlerMapMu.Lock()
+						peerIDHex := hex.EncodeToString(oneMessage.PeerID)
+						olHandlerMapMu.Lock()
 						msgHandler := olMessageHandlers[peerIDHex]
 						lclAddr := msgHandler.Peer.Conn.LocalAddr()
-	                                        rmtAddr := msgHandler.Peer.Conn.RemoteAddr()
+						rmtAddr := msgHandler.Peer.Conn.RemoteAddr()
+						olHandlerMapMu.Unlock()
+						zap.S().Infof("GET_BLOCK -> %v (%v -> %v)", peerIDHex, string(oneMessage.Value), lclAddr, rmtAddr)
+
+						highestBlock, err := goolChain.GetHighestBlock()
+						if err != nil {
+							zap.S().Error(err)
+							continue
+						}
+
+						olHandlerMapMu.Lock()
+						msgHandler = olMessageHandlers[peerIDHex]
+						err = sendBlock(msgHandler.Peer.Conn, highestBlock)
+						if err != nil {
+							zap.S().Error(err)
+						}
+						olHandlerMapMu.Unlock()
+
+					case messages.GET_DATA:
+						peerIDHex := hex.EncodeToString(oneMessage.PeerID)
+						olHandlerMapMu.Lock()
+						msgHandler := olMessageHandlers[peerIDHex]
+						lclAddr := msgHandler.Peer.Conn.LocalAddr()
+						rmtAddr := msgHandler.Peer.Conn.RemoteAddr()
 						olHandlerMapMu.Unlock()
 						blockRange := bytes.Split(oneMessage.Value, []byte(messages.SEPARATOR))
 						low := uint64(0)
 						high := uint64(0)
 						if len(blockRange) == 2 {
-						  var lowErr error = nil
-						  var highErr error = nil
-						  low, lowErr = strconv.ParseUint(strings.Trim(string(blockRange[0]), "\""), 10, 64)
-						  high, highErr = strconv.ParseUint(strings.Trim(string(blockRange[1]), "\""), 10, 64)
-						  if lowErr != nil || highErr != nil {
-						    zap.S().Error("Could not parse given block range: %v -> %v", blockRange[0], blockRange[1])
-						    continue
-						  }
+							var lowErr error = nil
+							var highErr error = nil
+							low, lowErr = strconv.ParseUint(strings.Trim(string(blockRange[0]), "\""), 10, 64)
+							high, highErr = strconv.ParseUint(strings.Trim(string(blockRange[1]), "\""), 10, 64)
+							if lowErr != nil || highErr != nil {
+								zap.S().Error("Could not parse given block range: %v -> %v", blockRange[0], blockRange[1])
+								continue
+							}
 						}
-					        zap.S().Infof("GET_DATA %v -> %v-%v (%v <- %v)", peerIDHex, low, high, lclAddr, rmtAddr)
+						zap.S().Infof("GET_DATA %v -> %v-%v (%v -> %v)", peerIDHex, low, high, lclAddr, rmtAddr)
 						highestBlock, err := goolChain.GetHighestBlock()
 						if err != nil {
-						  zap.S().Error(err)
-						  continue
+							zap.S().Error(err)
+							continue
+						}
+						if highestBlock.GetHeight() < low {
+							zap.S().Infof("Low range of request %v exceeds local chain height %v", low, highestBlock.GetHeight())
+							continue
 						}
 						if highestBlock.GetHeight() < high {
-						  zap.S().Infof("Truncating request %v to highest available block: %v", high, highestBlock.GetHeight())
-						  high = highestBlock.GetHeight()
+							zap.S().Infof("Truncating request %v to highest available block: %v", high, highestBlock.GetHeight())
+							high = highestBlock.GetHeight()
 						}
+						if high-low > 20 {
+							zap.S().Infof("Requested block range is length %v, reducing to length 20", high-low)
+							high = low + 20
+						}
+
+						// collect the necessary blocks from the database
+						blocksToSend := new(p2p_pb.BcBlocks)
+						for i := low; i <= high; i++ {
+							block, err := goolChain.GetBlockByHeight(i)
+							if err != nil {
+								zap.S().Errorf("GET_DATA Error -> %v", err)
+								continue
+							}
+							blocksToSend.Blocks = append(blocksToSend.Blocks, block)
+						}
+						bytesToSend, err := proto.Marshal(blocksToSend)
+						if len(blocksToSend.Blocks) > 0 && err == nil {
+							reqbytes := []byte(messages.DATA)
+							reqbytes = append(reqbytes, []byte(messages.SEPARATOR)...)
+							reqbytes = append(reqbytes, bytesToSend...)
+							reqLen := len(reqbytes)
+							request := make([]byte, reqLen+4)
+							copy(request[4:], reqbytes)
+							binary.BigEndian.PutUint32(request[0:], uint32(reqLen))
+
+							olHandlerMapMu.Lock()
+							msgHandler := olMessageHandlers[peerIDHex]
+							n, err := msgHandler.Peer.Conn.Write(request)
+							zap.S().Infof("GET_DATA -> Wrote %v bytes to the outbound connection!", n)
+							if n != len(request) {
+								zap.S().Fatal("Fatal error: didn't write complete request to outbound connection!")
+								os.Exit(1)
+							}
+							checkError(err)
+							olHandlerMapMu.Unlock()
+						} else {
+							zap.S().Errorf("Error replying to GET_DATA: %v", err)
+						}
+
 					default:
 						zap.S().Debugf("Throwing away: %v->%v", hex.EncodeToString(oneMessage.PeerID), oneMessage.Type)
 					}
@@ -692,7 +779,7 @@ func main() {
 			}
 		}
 	}()
-	go func() {
+	go func(goolChain *chain.OverlineBlockchain) {
 		blockStride := uint64(10)
 		iStride := uint64(0)
 		topRange := uint64(startingHeight + (iStride+1)*blockStride + 1)
@@ -708,7 +795,7 @@ func main() {
 			olHandlerMapMu.Unlock()
 			for _, messageHandler := range localHandlers {
 				high := uint64((iStride+1)*blockStride) + startingHeight + 1
-				if high < messageHandler.Peer.Height && messageHandler.Peer.Height-high <= uint64(10*gooldb.Config.AncientChunkSize) {
+				if high < messageHandler.Peer.Height && messageHandler.Peer.Height-high <= uint64(gooldb.Config.AncientChunkSize) {
 					gooldb.UnSetMultiplexPeers()
 				}
 			}
@@ -717,6 +804,7 @@ func main() {
 				low, high := uint64(iStride*blockStride), uint64((iStride+1)*blockStride)
 				low += startingHeight + 1
 				high += startingHeight + 1
+				zap.S().Debugf("Peer %v height = %v low = %v high = %v", common.BriefHash(peer), messageHandler.Peer.Height, low, high)
 				if messageHandler.Peer.Height == 0 || messageHandler.Peer.Height < low || messageHandler.Peer.Height < topRange {
 					olMessageMu.Unlock()
 					continue
@@ -754,31 +842,50 @@ func main() {
 
 				if gooldb.IsMultiplexPeers() {
 					iStride += 1
-					}
-					if iStride%100 == 0 && iStride != 0 { // if we've submitted a request for 1000 blocks - wait until we have received them all
-						zap.S().Debugf("Submitted block requests for range [%v,%v]", startingHeight+(iStride-100)*blockStride, startingHeight+iStride*blockStride)
-						for {
-							ibdWorkList.Mu.Lock()
-							nBlocksRemaining := len(ibdWorkList.AllowedBlocks)
-							ibdWorkList.Mu.Unlock()
-							if nBlocksRemaining == 0 {
-								break
-							} else {
-								zap.S().Debugf("waiting for %v blocks to arrive...", nBlocksRemaining)
-								time.Sleep(time.Millisecond * 500)
-							}
+				}
+				if iStride%100 == 0 && iStride != 0 { // if we've submitted a request for 1000 blocks - wait until we have received them all
+					zap.S().Debugf("Submitted block requests for range [%v,%v]", startingHeight+(iStride-100)*blockStride, startingHeight+iStride*blockStride)
+					for {
+						ibdWorkList.Mu.Lock()
+						nBlocksRemaining := len(ibdWorkList.AllowedBlocks)
+						ibdWorkList.Mu.Unlock()
+						if nBlocksRemaining == 0 {
+							break
+						} else {
+							zap.S().Debugf("waiting for %v blocks to arrive...", nBlocksRemaining)
+							/*
+								ibdWorkList.Mu.Lock()
+								for height, num := range ibdWorkList.AllowedBlocks {
+								  zap.S().Debugf("\twaiting for block %v - %v", height, num)
+								}
+								ibdWorkList.Mu.Unlock()
+							*/
+							time.Sleep(time.Millisecond * 500)
 						}
 					}
-				
+				}
 
 				topRange = uint64(startingHeight + (iStride+1)*blockStride + 1)
 			}
 			if !gooldb.IsMultiplexPeers() {
 				iStride += 1
 			}
-			time.Sleep(time.Millisecond * 250)
+			time.Sleep(time.Millisecond * 350)
 		}
 		zap.L().Info("Initial block download has completed.")
+		highestBlock, err := goolChain.GetHighestBlock()
+		if err == nil {
+			olHandlerMapMu.Lock()
+			for _, msgHandler := range olMessageHandlers {
+				err = sendBlock(msgHandler.Peer.Conn, highestBlock)
+				if err != nil {
+					zap.S().Error(err)
+				}
+			}
+			olHandlerMapMu.Unlock()
+		} else {
+			zap.S().Fatal("Unable to get highest block after initial block download!")
+		}
 		for {
 			olHandlerMapMu.Lock()
 			localHandlers := make(map[string]OverlineMessageHandler)
@@ -830,7 +937,7 @@ func main() {
 
 		}
 
-	}()
+	}(&goolChain)
 
 	defer func() {
 		olHandlerMapMu.Lock()
@@ -846,7 +953,36 @@ func main() {
 	return
 }
 
-func handshake_peer(conn net.Conn, id []byte, buf *[0xa00000]byte) ([]byte, int, error) {
+func sendBlock(conn net.Conn, block *p2p_pb.BcBlock) error {
+	bytesToSend, err := proto.Marshal(block)
+	if err != nil {
+		return err
+	}
+	return sendBlockBytes(conn, bytesToSend)
+}
+
+func sendBlockBytes(conn net.Conn, blockBytes []byte) error {
+	reqbytes := []byte(messages.BLOCK)
+	reqbytes = append(reqbytes, []byte(messages.SEPARATOR)...)
+	reqbytes = append(reqbytes, blockBytes...)
+	reqLen := len(reqbytes)
+	request := make([]byte, reqLen+4)
+	copy(request[4:], reqbytes)
+	binary.BigEndian.PutUint32(request[0:], uint32(reqLen))
+
+	n, err := conn.Write(request)
+	zap.S().Infof("sendBlock -> Wrote %v bytes to the outbound connection!", n)
+	if n != len(request) {
+		zap.S().Fatal("Fatal error: didn't write complete request to outbound connection!")
+		os.Exit(1)
+	}
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func handshake_peer(conn net.Conn, id []byte, starter, genesis *p2p_pb.BcBlock, buf *[0xa00000]byte) ([]byte, int, error) {
 	peerHandshake := make([]byte, 0)
 
 	lenSize := binary.PutUvarint(buf[0:], uint64(len(id)))
@@ -900,10 +1036,30 @@ func handshake_peer(conn net.Conn, id []byte, buf *[0xa00000]byte) ([]byte, int,
 	}
 	zap.S().Debugf("peer handshake -> full handshake: (%v) %v", lenPeer, hex.EncodeToString(peerHandshake[cursor:cursor+lenPeer]))
 	cursor += lenPeer
-
 	copy(buf[0:], buf[cursor:ntot])
 
-	return peerHandshake[1:lenPeer+1], int(ntot - int(cursor)), nil
+	// now that we have made the first part of the handshake, send current highest block
+	starterBytes, err := proto.Marshal(starter)
+	if err != nil {
+		return make([]byte, 0), -1, err
+	}
+	reqbytes := []byte(messages.BLOCK)
+	reqbytes = append(reqbytes, []byte(messages.SEPARATOR)...)
+	reqbytes = append(reqbytes, starterBytes...)
+	reqLen := len(reqbytes)
+	request := make([]byte, reqLen+4)
+	copy(request[4:], reqbytes)
+	binary.BigEndian.PutUint32(request[0:], uint32(reqLen))
+
+	n, err = conn.Write(request)
+	//zap.S().Debugf("Wrote %v bytes to the outbound connection!", n)
+	if n != len(request) {
+		zap.S().Fatal("Fatal error: didn't write complete request to outbound connection!")
+		os.Exit(1)
+	}
+	checkError(err)
+
+	return peerHandshake[1 : lenPeer+1], int(ntot - int(cursor)), nil
 }
 
 func getNtp(ctx context.Context) (types.Time, error) {
