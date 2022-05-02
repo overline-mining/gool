@@ -30,5 +30,5 @@ jobs:
           BUILD=$(git rev-parse --short HEAD)
           VERSION=${TAG}-g${BUILD}
 
-          docker/build-lisk.sh linux/amd64,linux/arm/v7,linux/arm64 ${{ secrets.DOCKERHUB_ACCOUNT }} ${VERSION} --push
-          docker/build-lisk.sh linux/amd64,linux/arm/v7,linux/arm64 ${{ secrets.DOCKERHUB_ACCOUNT }} latest --push
+          docker/build-lisk.sh linux/amd64 ${{ secrets.DOCKERHUB_ACCOUNT }} ${VERSION} --push
+          docker/build-lisk.sh linux/amd64 ${{ secrets.DOCKERHUB_ACCOUNT }} latest --push
