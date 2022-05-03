@@ -1,4 +1,4 @@
-ARG NODEJS_VERSION=12
+ARG NODEJS_VERSION=16
 FROM node:$NODEJS_VERSION-bullseye-slim
 
 ARG CORE_VERSION
@@ -25,9 +25,6 @@ RUN npm install lisk-core@$CORE_VERSION && \
 
 USER root
 RUN apt-get remove -y build-essential autoconf automake libtool python3 && apt-get autoremove -y
-
-EXPOSE 5000
-EXPOSE 5001
 
 USER lisk
 RUN mkdir /home/lisk/.lisk
