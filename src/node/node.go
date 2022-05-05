@@ -484,7 +484,7 @@ func main() {
 	dhtConfig := dht.NewDefaultServerConfig()
 	dhtConfig.NodeId = krpc.IdFromString(id.AsString())
 	dhtConfig.StartingNodes = func() ([]dht.Addr, error) { return dht.GlobalBootstrapAddrs("udp4") }
-	dhtConfig.Conn, err = net.ListenPacket("udp4", "0.0.0.0:16061")
+	dhtConfig.Conn, err = net.ListenPacket("udp4", "0.0.0.0:16060")
 	if err != nil {
 		zap.S().Info(err)
 		return
@@ -510,8 +510,35 @@ func main() {
 	olMessageHandlers := make(map[string]OverlineMessageHandler)
 	dialer := net.Dialer{Timeout: time.Millisecond * 5000}
 
-	var waitForPeers sync.WaitGroup
+	// server for incoming connections
+	go func() {
+		nodeListen, err := net.Listen("tcp4", ":16061")
+		if err != nil {
+			zap.S().Panic(err)
+		}
+		defer nodeListen.Close()
+		zap.S().Infof("Node server listening on %v", nodeListen.Addr())
+		for {
+			conn, err := nodeListen.Accept()
+			if err != nil {
+				zap.S().Panic(err)
+			}
+			zap.S().Infof("New connection request %v -> %v", conn.RemoteAddr(), conn.LocalAddr())
+			handler := OverlineMessageHandler{Mu: &olMessageMu, Messages: &olMessages, ID: id_bytes}
+			handler.Initialize(conn, startingHighestBlock, genesisBlock)
+			olHandlerMapMu.Lock()
+			if _, ok := olMessageHandlers[hex.EncodeToString(handler.Peer.ID)]; !ok {
+				go handler.Run()
+				olMessageHandlers[hex.EncodeToString(handler.Peer.ID)] = handler
+				olHandlerMapMu.Unlock()
+			} else {
+				olHandlerMapMu.Unlock()
+			}
+		}
+	}()
 
+	// discover outgoing peer connections
+	var waitForPeers sync.WaitGroup
 	for _, peer := range allPeers.PeerList {
 		waitForPeers.Add(1)
 		go func() {
@@ -636,22 +663,32 @@ func main() {
 							peerIDHex := hex.EncodeToString(oneMessage.PeerID)
 							olHandlerMapMu.Lock()
 							msgHandler := olMessageHandlers[peerIDHex]
+							oldHeight := msgHandler.Peer.Height
 							msgHandler.Peer.Height = b.GetHeight()
 							lclAddr := msgHandler.Peer.Conn.LocalAddr()
 							rmtAddr := msgHandler.Peer.Conn.RemoteAddr()
 							olMessageHandlers[peerIDHex] = msgHandler
 
-							for aPeerID, aHandler := range olMessageHandlers {
-								if aPeerID != peerIDHex && aHandler.Peer.Height > 0 && aHandler.Peer.Height < b.GetHeight() {
-									sendBlockBytes(msgHandler.Peer.Conn, oneMessage.Value)
-									checkError(err)
-								}
-							}
-
 							olHandlerMapMu.Unlock()
-							zap.S().Debugf("Received Valid BLOCK: Set Height of %v to %v (%v <- %v)", common.BriefHash(peerIDHex), b.GetHeight(), lclAddr, rmtAddr)
+							if oldHeight == 0 {
+								zap.S().Infof("Setting known height of peer %v (%v) to %v", common.BriefHash(peerIDHex), rmtAddr, b.GetHeight())
+							} else {
+								zap.S().Debugf("Received Valid BLOCK: Set Height of %v to %v (%v <- %v)", common.BriefHash(peerIDHex), b.GetHeight(), lclAddr, rmtAddr)
+							}
 							if goolChain.IsFollowingChain() {
 								goolChain.AddBlock(b)
+								if !gooldb.IsInitialBlockDownload() {
+									highest, err := goolChain.GetHighestBlock()
+									if err != nil && highest.GetHash() == b.GetHash() {
+
+										for aPeerID, aHandler := range olMessageHandlers {
+											if aPeerID != peerIDHex && aHandler.Peer.Height > 0 && aHandler.Peer.Height < b.GetHeight() {
+												sendBlockBytes(msgHandler.Peer.Conn, oneMessage.Value)
+												checkError(err)
+											}
+										}
+									}
+								}
 							}
 							if gooldb.IsInitialBlockDownload() {
 								height_i64 := int64(b.GetHeight())
@@ -722,15 +759,17 @@ func main() {
 						}
 						if highestBlock.GetHeight() < low {
 							zap.S().Infof("Low range of request %v exceeds local chain height %v", low, highestBlock.GetHeight())
-							continue
-						}
-						if highestBlock.GetHeight() < high {
-							zap.S().Infof("Truncating request %v to highest available block: %v", high, highestBlock.GetHeight())
-							high = highestBlock.GetHeight()
-						}
-						if high-low > 20 {
-							zap.S().Infof("Requested block range is length %v, reducing to length 20", high-low)
-							high = low + 20
+							low = high + 1
+
+						} else {
+							if highestBlock.GetHeight() < high {
+								zap.S().Infof("Truncating request %v to highest available block: %v", high, highestBlock.GetHeight())
+								high = highestBlock.GetHeight()
+							}
+							if high-low > 21 {
+								zap.S().Infof("Requested block range is length %v, reducing to length 20", high-low)
+								high = low + 21
+							}
 						}
 
 						// collect the necessary blocks from the database
@@ -744,7 +783,7 @@ func main() {
 							blocksToSend.Blocks = append(blocksToSend.Blocks, block)
 						}
 						bytesToSend, err := proto.Marshal(blocksToSend)
-						if len(blocksToSend.Blocks) > 0 && err == nil {
+						if (len(blocksToSend.Blocks) > 0 || low > high) && err == nil {
 							reqbytes := []byte(messages.DATA)
 							reqbytes = append(reqbytes, []byte(messages.SEPARATOR)...)
 							reqbytes = append(reqbytes, bytesToSend...)
@@ -795,7 +834,7 @@ func main() {
 			olHandlerMapMu.Unlock()
 			for _, messageHandler := range localHandlers {
 				high := uint64((iStride+1)*blockStride) + startingHeight + 1
-				if high < messageHandler.Peer.Height && messageHandler.Peer.Height-high <= uint64(gooldb.Config.AncientChunkSize) {
+				if messageHandler.Peer.Height > 0 && high < messageHandler.Peer.Height && messageHandler.Peer.Height-high <= uint64(gooldb.Config.AncientChunkSize) {
 					gooldb.UnSetMultiplexPeers()
 				}
 			}
