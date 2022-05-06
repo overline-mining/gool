@@ -116,8 +116,9 @@ func (mh *OverlineMessageHandler) Initialize(conn net.Conn, starter, genesis *p2
 	mh.buflen = 0
 
 	peer_id, nbuf, err := handshake_peer(conn, mh.ID, starter, genesis, &mh.buf)
+	zap.S().Infof("handshake -> %v, %v, %v", peer_id, nbuf, err)
 	mh.buflen = nbuf
-	if err != nil {
+	if nbuf == -1 || err != nil {
 		zap.S().Debugf("Failed to connect to %v: %v", hex.EncodeToString(peer_id), err)
 		conn.Close()
 		return
@@ -133,6 +134,9 @@ type IBDWorkList struct {
 
 func (mh *OverlineMessageHandler) Run() {
 	messageCounter := uint64(0)
+	for mh.buflen == -1 {
+		time.Sleep(time.Millisecond * 100)
+	}
 	for {
 		n := 0
 		cursor := 0
@@ -527,7 +531,7 @@ func main() {
 			handler := OverlineMessageHandler{Mu: &olMessageMu, Messages: &olMessages, ID: id_bytes}
 			handler.Initialize(conn, startingHighestBlock, genesisBlock)
 			olHandlerMapMu.Lock()
-			if _, ok := olMessageHandlers[hex.EncodeToString(handler.Peer.ID)]; !ok {
+			if _, ok := olMessageHandlers[hex.EncodeToString(handler.Peer.ID)]; !ok && len(handler.Peer.ID) > 0 {
 				go handler.Run()
 				olMessageHandlers[hex.EncodeToString(handler.Peer.ID)] = handler
 				olHandlerMapMu.Unlock()
@@ -562,10 +566,12 @@ func main() {
 
 			handler := OverlineMessageHandler{Mu: &olMessageMu, Messages: &olMessages, ID: id_bytes}
 			handler.Initialize(conn, startingHighestBlock, genesisBlock)
-			go handler.Run()
-			olHandlerMapMu.Lock()
-			olMessageHandlers[hex.EncodeToString(handler.Peer.ID)] = handler
-			olHandlerMapMu.Unlock()
+			if len(handler.Peer.ID) > 0 {
+				go handler.Run()
+				olHandlerMapMu.Lock()
+				olMessageHandlers[hex.EncodeToString(handler.Peer.ID)] = handler
+				olHandlerMapMu.Unlock()
+			}
 		}()
 		time.Sleep(time.Millisecond * 10)
 	}
@@ -621,10 +627,10 @@ func main() {
 						if err == nil && len(blocks.Blocks) > 0 {
 							zap.S().Debugf("Got blocklist of length %v with starting value: %v %v", len(blocks.Blocks), blocks.Blocks[0].GetHeight(), blocks.Blocks[0].GetHash())
 							/*
-							for _, blk := range blocks.Blocks {
-							   zap.S().Infof("Block %v @ %v", blk.GetHash(), blk.GetHeight())
-							}							
-							zap.S().Infof("Starting height %v, ending height %v", blocks.Blocks[0].GetHeight(), blocks.Blocks[len(blocks.Blocks)-1].GetHeight())
+								for _, blk := range blocks.Blocks {
+								   zap.S().Infof("Block %v @ %v", blk.GetHash(), blk.GetHeight())
+								}
+								zap.S().Infof("Starting height %v, ending height %v", blocks.Blocks[0].GetHeight(), blocks.Blocks[len(blocks.Blocks)-1].GetHeight())
 							*/
 						}
 						if gooldb.IsInitialBlockDownload() {
@@ -759,10 +765,10 @@ func main() {
 								zap.S().Error("Could not parse given block range: %v -> %v", blockRange[0], blockRange[1])
 								continue
 							}
-							if high > 10 * highestBlock.GetHeight() && highStr[len(highStr) - 2:] == "16" {
-							   zap.S().Info("Trimming errant trailing 16 from abnormal request")
-							   high, _ = strconv.ParseUint(highStr[:len(highStr) - 2], 10, 64)
-							   zap.S().Infof("High side of request is now: %v" , high)
+							if high > 10*highestBlock.GetHeight() && highStr[len(highStr)-2:] == "16" {
+								zap.S().Info("Trimming errant trailing 16 from abnormal request")
+								high, _ = strconv.ParseUint(highStr[:len(highStr)-2], 10, 64)
+								zap.S().Infof("High side of request is now: %v", high)
 							}
 						}
 						zap.S().Infof("GET_DATA %v -> %v-%v (%v -> %v)", peerIDHex, low, high, lclAddr, rmtAddr)
