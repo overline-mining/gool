@@ -620,6 +620,12 @@ func main() {
 						err = proto.Unmarshal(oneMessage.Value, &blocks)
 						if err == nil && len(blocks.Blocks) > 0 {
 							zap.S().Debugf("Got blocklist of length %v with starting value: %v %v", len(blocks.Blocks), blocks.Blocks[0].GetHeight(), blocks.Blocks[0].GetHash())
+							/*
+							for _, blk := range blocks.Blocks {
+							   zap.S().Infof("Block %v @ %v", blk.GetHash(), blk.GetHeight())
+							}							
+							zap.S().Infof("Starting height %v, ending height %v", blocks.Blocks[0].GetHeight(), blocks.Blocks[len(blocks.Blocks)-1].GetHeight())
+							*/
 						}
 						if gooldb.IsInitialBlockDownload() {
 							goodBlocks := p2p_pb.BcBlocks{}
@@ -741,18 +747,25 @@ func main() {
 						blockRange := bytes.Split(oneMessage.Value, []byte(messages.SEPARATOR))
 						low := uint64(0)
 						high := uint64(0)
+						highestBlock, err := goolChain.GetHighestBlock()
 						if len(blockRange) == 2 {
 							var lowErr error = nil
 							var highErr error = nil
-							low, lowErr = strconv.ParseUint(strings.Trim(string(blockRange[0]), "\""), 10, 64)
-							high, highErr = strconv.ParseUint(strings.Trim(string(blockRange[1]), "\""), 10, 64)
+							lowStr := strings.Trim(string(blockRange[0]), "\"")
+							highStr := strings.Trim(string(blockRange[1]), "\"")
+							low, lowErr = strconv.ParseUint(lowStr, 10, 64)
+							high, highErr = strconv.ParseUint(highStr, 10, 64)
 							if lowErr != nil || highErr != nil {
 								zap.S().Error("Could not parse given block range: %v -> %v", blockRange[0], blockRange[1])
 								continue
 							}
+							if high > 10 * highestBlock.GetHeight() && highStr[len(highStr) - 2:] == "16" {
+							   zap.S().Info("Trimming errant trailing 16 from abnormal request")
+							   high, _ = strconv.ParseUint(highStr[:len(highStr) - 2], 10, 64)
+							   zap.S().Infof("High side of request is now: %v" , high)
+							}
 						}
 						zap.S().Infof("GET_DATA %v -> %v-%v (%v -> %v)", peerIDHex, low, high, lclAddr, rmtAddr)
-						highestBlock, err := goolChain.GetHighestBlock()
 						if err != nil {
 							zap.S().Error(err)
 							continue
@@ -766,9 +779,9 @@ func main() {
 								zap.S().Infof("Truncating request %v to highest available block: %v", high, highestBlock.GetHeight())
 								high = highestBlock.GetHeight()
 							}
-							if high-low > 21 {
-								zap.S().Infof("Requested block range is length %v, reducing to length 20", high-low)
-								high = low + 21
+							if high-low > 55 {
+								zap.S().Infof("Requested block range is length %v, reducing to length 55", high-low)
+								high = low + 55
 							}
 						}
 
@@ -795,7 +808,7 @@ func main() {
 							olHandlerMapMu.Lock()
 							msgHandler := olMessageHandlers[peerIDHex]
 							n, err := msgHandler.Peer.Conn.Write(request)
-							zap.S().Infof("GET_DATA -> Wrote %v bytes to the outbound connection!", n)
+							zap.S().Infof("GET_DATA -> Wrote %v bytes / %v blocks to the outbound connection!", n, len(blocksToSend.Blocks))
 							if n != len(request) {
 								zap.S().Fatal("Fatal error: didn't write complete request to outbound connection!")
 								os.Exit(1)
