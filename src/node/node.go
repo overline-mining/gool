@@ -56,7 +56,8 @@ var (
 	limitAllConnections = flag.Uint("limit-connections", 60, "Total limit of network connections, both inbound and outbound. Divided in half to limit each direction. Default value is 60.")
 	dbFileDescriptors   = flag.Int("db-file-descriptors", 500, "Maximum allowed file descriptors count that will be used by state database. Default value is 500.")
 	olTestPeer          = flag.String("test-peer", "", "Specify an exact peer (ip:port) to connect to instead of using tracker")
-	ipBlackList         = flag.String("black-list", "", "Specify a comma separate list of IPs to never connect to")
+	ipBlackList         = flag.String("black-list", "", "Specify a comma separated list of IPs to never connect to")
+	ipWhiteList         = flag.String("white-list", "", "Specify a comma separated list of IPs we should only connect to")
 	olWorkDir           = flag.String("ol-workdir", ".overline", "Specify the working directory for the node")
 	dbFileName          = flag.String("db-file-name", "overline.boltdb", "The file we're going to write the blockchain to within olWorkDir")
 	validateFullChain   = flag.Bool("full-validation", false, "Run a slow but complete validation of your local blockchain DB")
@@ -312,6 +313,15 @@ func main() {
 		}
 	}
 
+	// setup whitelist
+	goodPeers := make(map[string]bool)
+	if len(*ipWhiteList) > 0 {
+	  for _, goodPeer := range strings.Split(*ipWhiteList, ",") {
+                        zap.S().Debugf("Adding %v to whitelist", goodPeer)
+                        goodPeers[goodPeer] = true
+	        }
+	}
+
 	// database testing
 	startingHeight := uint64(0)
 	dbFilePath := filepath.Join(*olWorkDir, *dbFileName)
@@ -440,7 +450,11 @@ func main() {
 						for _, peer := range resp.Peers {
 							ipString := fmt.Sprintf("%v", peer.IP)
 							if _, ok := badPeers[ipString]; !ok {
-								allPeers.AddPeer(fmt.Sprintf("%v", peer), peer)
+							        if _, ok = goodPeers[ipString]; ok || len(goodPeers) == 0 {
+								  allPeers.AddPeer(fmt.Sprintf("%v", peer), peer)
+								} else {
+								  zap.S().Debugf("Skipping peer %v not in white-list", peer.IP)
+								}
 							} else {
 								zap.S().Debugf("Skipping black-listed peer %v", peer.IP)
 							}
@@ -528,14 +542,24 @@ func main() {
 				zap.S().Panic(err)
 			}
 			zap.S().Infof("New connection request %v -> %v", conn.RemoteAddr(), conn.LocalAddr())
+			conn_ip := strings.Split(conn.RemoteAddr().String(), ":")[0]
+			if _, ok := badPeers[conn_ip]; ok {
+			  conn.Close()
+			  continue
+			}
+			if _, ok := goodPeers[conn_ip]; !ok && len(goodPeers) > 0 {
+			  conn.Close()
+			  continue
+			}
 			handler := OverlineMessageHandler{Mu: &olMessageMu, Messages: &olMessages, ID: id_bytes}
 			handler.Initialize(conn, startingHighestBlock, genesisBlock)
 			olHandlerMapMu.Lock()
-			if _, ok := olMessageHandlers[hex.EncodeToString(handler.Peer.ID)]; !ok && len(handler.Peer.ID) > 0 {
+			if _, ok := olMessageHandlers[hex.EncodeToString(handler.Peer.ID)]; !ok && len(handler.Peer.ID) > 0 && bytes.Compare(handler.ID, handler.Peer.ID) != 0 {
 				go handler.Run()
 				olMessageHandlers[hex.EncodeToString(handler.Peer.ID)] = handler
 				olHandlerMapMu.Unlock()
 			} else {
+			        conn.Close()
 				olHandlerMapMu.Unlock()
 			}
 		}
@@ -566,12 +590,15 @@ func main() {
 
 			handler := OverlineMessageHandler{Mu: &olMessageMu, Messages: &olMessages, ID: id_bytes}
 			handler.Initialize(conn, startingHighestBlock, genesisBlock)
-			if len(handler.Peer.ID) > 0 {
+			if len(handler.Peer.ID) > 0 && bytes.Compare(handler.ID, handler.Peer.ID) != 0 {
 				go handler.Run()
 				olHandlerMapMu.Lock()
 				olMessageHandlers[hex.EncodeToString(handler.Peer.ID)] = handler
 				olHandlerMapMu.Unlock()
+			} else {
+			  conn.Close()
 			}
+			
 		}()
 		time.Sleep(time.Millisecond * 10)
 	}
@@ -772,9 +799,10 @@ func main() {
 							}
 						}
 						zap.S().Infof("GET_DATA %v -> %v-%v (%v -> %v)", peerIDHex, low, high, lclAddr, rmtAddr)
+						go func() {
 						if err != nil {
 							zap.S().Error(err)
-							continue
+							return
 						}
 						if highestBlock.GetHeight() < low {
 							zap.S().Infof("Low range of request %v exceeds local chain height %v", low, highestBlock.GetHeight())
@@ -797,7 +825,7 @@ func main() {
 							block, err := goolChain.GetBlockByHeight(i)
 							if err != nil {
 								zap.S().Errorf("GET_DATA Error -> %v", err)
-								continue
+								return
 							}
 							blocksToSend.Blocks = append(blocksToSend.Blocks, block)
 						}
@@ -824,6 +852,7 @@ func main() {
 						} else {
 							zap.S().Errorf("Error replying to GET_DATA: %v", err)
 						}
+						}()
 
 					default:
 						zap.S().Debugf("Throwing away: %v->%v", hex.EncodeToString(oneMessage.PeerID), oneMessage.Type)
