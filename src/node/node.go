@@ -316,10 +316,10 @@ func main() {
 	// setup whitelist
 	goodPeers := make(map[string]bool)
 	if len(*ipWhiteList) > 0 {
-	  for _, goodPeer := range strings.Split(*ipWhiteList, ",") {
-                        zap.S().Debugf("Adding %v to whitelist", goodPeer)
-                        goodPeers[goodPeer] = true
-	        }
+		for _, goodPeer := range strings.Split(*ipWhiteList, ",") {
+			zap.S().Debugf("Adding %v to whitelist", goodPeer)
+			goodPeers[goodPeer] = true
+		}
 	}
 
 	// database testing
@@ -450,10 +450,10 @@ func main() {
 						for _, peer := range resp.Peers {
 							ipString := fmt.Sprintf("%v", peer.IP)
 							if _, ok := badPeers[ipString]; !ok {
-							        if _, ok = goodPeers[ipString]; ok || len(goodPeers) == 0 {
-								  allPeers.AddPeer(fmt.Sprintf("%v", peer), peer)
+								if _, ok = goodPeers[ipString]; ok || len(goodPeers) == 0 {
+									allPeers.AddPeer(fmt.Sprintf("%v", peer), peer)
 								} else {
-								  zap.S().Debugf("Skipping peer %v not in white-list", peer.IP)
+									zap.S().Debugf("Skipping peer %v not in white-list", peer.IP)
 								}
 							} else {
 								zap.S().Debugf("Skipping black-listed peer %v", peer.IP)
@@ -544,12 +544,12 @@ func main() {
 			zap.S().Infof("New connection request %v -> %v", conn.RemoteAddr(), conn.LocalAddr())
 			conn_ip := strings.Split(conn.RemoteAddr().String(), ":")[0]
 			if _, ok := badPeers[conn_ip]; ok {
-			  conn.Close()
-			  continue
+				conn.Close()
+				continue
 			}
 			if _, ok := goodPeers[conn_ip]; !ok && len(goodPeers) > 0 {
-			  conn.Close()
-			  continue
+				conn.Close()
+				continue
 			}
 			handler := OverlineMessageHandler{Mu: &olMessageMu, Messages: &olMessages, ID: id_bytes}
 			handler.Initialize(conn, startingHighestBlock, genesisBlock)
@@ -559,7 +559,7 @@ func main() {
 				olMessageHandlers[hex.EncodeToString(handler.Peer.ID)] = handler
 				olHandlerMapMu.Unlock()
 			} else {
-			        conn.Close()
+				conn.Close()
 				olHandlerMapMu.Unlock()
 			}
 		}
@@ -596,9 +596,9 @@ func main() {
 				olMessageHandlers[hex.EncodeToString(handler.Peer.ID)] = handler
 				olHandlerMapMu.Unlock()
 			} else {
-			  conn.Close()
+				conn.Close()
 			}
-			
+
 		}()
 		time.Sleep(time.Millisecond * 10)
 	}
@@ -800,58 +800,58 @@ func main() {
 						}
 						zap.S().Infof("GET_DATA %v -> %v-%v (%v -> %v)", peerIDHex, low, high, lclAddr, rmtAddr)
 						go func() {
-						if err != nil {
-							zap.S().Error(err)
-							return
-						}
-						if highestBlock.GetHeight() < low {
-							zap.S().Infof("Low range of request %v exceeds local chain height %v", low, highestBlock.GetHeight())
-							low = high + 1
-
-						} else {
-							if highestBlock.GetHeight() < high {
-								zap.S().Infof("Truncating request %v to highest available block: %v", high, highestBlock.GetHeight())
-								high = highestBlock.GetHeight()
-							}
-							if high-low > 55 {
-								zap.S().Infof("Requested block range is length %v, reducing to length 55", high-low)
-								high = low + 55
-							}
-						}
-
-						// collect the necessary blocks from the database
-						blocksToSend := new(p2p_pb.BcBlocks)
-						for i := low; i <= high; i++ {
-							block, err := goolChain.GetBlockByHeight(i)
 							if err != nil {
-								zap.S().Errorf("GET_DATA Error -> %v", err)
+								zap.S().Error(err)
 								return
 							}
-							blocksToSend.Blocks = append(blocksToSend.Blocks, block)
-						}
-						bytesToSend, err := proto.Marshal(blocksToSend)
-						if (len(blocksToSend.Blocks) > 0 || low > high) && err == nil {
-							reqbytes := []byte(messages.DATA)
-							reqbytes = append(reqbytes, []byte(messages.SEPARATOR)...)
-							reqbytes = append(reqbytes, bytesToSend...)
-							reqLen := len(reqbytes)
-							request := make([]byte, reqLen+4)
-							copy(request[4:], reqbytes)
-							binary.BigEndian.PutUint32(request[0:], uint32(reqLen))
+							if highestBlock.GetHeight() < low {
+								zap.S().Infof("Low range of request %v exceeds local chain height %v", low, highestBlock.GetHeight())
+								low = high + 1
 
-							olHandlerMapMu.Lock()
-							msgHandler := olMessageHandlers[peerIDHex]
-							n, err := msgHandler.Peer.Conn.Write(request)
-							zap.S().Infof("GET_DATA -> Wrote %v bytes / %v blocks to the outbound connection!", n, len(blocksToSend.Blocks))
-							if n != len(request) {
-								zap.S().Fatal("Fatal error: didn't write complete request to outbound connection!")
-								os.Exit(1)
+							} else {
+								if highestBlock.GetHeight() < high {
+									zap.S().Infof("Truncating request %v to highest available block: %v", high, highestBlock.GetHeight())
+									high = highestBlock.GetHeight()
+								}
+								if high-low > 55 {
+									zap.S().Infof("Requested block range is length %v, reducing to length 55", high-low)
+									high = low + 55
+								}
 							}
-							checkError(err)
-							olHandlerMapMu.Unlock()
-						} else {
-							zap.S().Errorf("Error replying to GET_DATA: %v", err)
-						}
+
+							// collect the necessary blocks from the database
+							blocksToSend := new(p2p_pb.BcBlocks)
+							for i := low; i <= high; i++ {
+								block, err := goolChain.GetBlockByHeight(i)
+								if err != nil {
+									zap.S().Errorf("GET_DATA Error -> %v", err)
+									return
+								}
+								blocksToSend.Blocks = append(blocksToSend.Blocks, block)
+							}
+							bytesToSend, err := proto.Marshal(blocksToSend)
+							if (len(blocksToSend.Blocks) > 0 || low > high) && err == nil {
+								reqbytes := []byte(messages.DATA)
+								reqbytes = append(reqbytes, []byte(messages.SEPARATOR)...)
+								reqbytes = append(reqbytes, bytesToSend...)
+								reqLen := len(reqbytes)
+								request := make([]byte, reqLen+4)
+								copy(request[4:], reqbytes)
+								binary.BigEndian.PutUint32(request[0:], uint32(reqLen))
+
+								olHandlerMapMu.Lock()
+								msgHandler := olMessageHandlers[peerIDHex]
+								n, err := msgHandler.Peer.Conn.Write(request)
+								zap.S().Infof("GET_DATA -> Wrote %v bytes / %v blocks to the outbound connection!", n, len(blocksToSend.Blocks))
+								if n != len(request) {
+									zap.S().Fatal("Fatal error: didn't write complete request to outbound connection!")
+									os.Exit(1)
+								}
+								checkError(err)
+								olHandlerMapMu.Unlock()
+							} else {
+								zap.S().Errorf("Error replying to GET_DATA: %v", err)
+							}
 						}()
 
 					default:
