@@ -118,14 +118,14 @@ func (mh *OverlineMessageHandler) Initialize(conn net.Conn, starter, genesis *p2
 	mh.buflen = 0
 
 	peer_id, nbuf, err := handshake_peer(conn, mh.ID, starter, genesis, &mh.buf)
-	zap.S().Infof("handshake (%v) -> %v, %v, %v", conn.RemoteAddr(), hex.EncodeToString(peer_id), nbuf, err)
+	zap.S().Debugf("handshake (%v) -> %v, %v, %v", conn.RemoteAddr(), hex.EncodeToString(peer_id), nbuf, err)
 	mh.buflen = nbuf
 	if nbuf == -1 || err != nil {
 		zap.S().Errorf("Failed to connect to %v: %v", hex.EncodeToString(peer_id), err)
 		conn.Close()
 		return
 	}
-	zap.S().Infof("Completed handshake: %v -> %v", hex.EncodeToString(mh.ID), hex.EncodeToString(peer_id))
+	zap.S().Infof("Completed handshake: %v -> %v", common.BriefHash(hex.EncodeToString(mh.ID)), common.BriefHash(hex.EncodeToString(peer_id)))
 	mh.Peer = OverlinePeer{Conn: conn, ID: peer_id, Height: 0, Connected: true}
 }
 
@@ -147,7 +147,7 @@ func (mh *OverlineMessageHandler) Run() {
 		if mh.buflen < 4 {
 			n, err = mh.Peer.Conn.Read(mh.buf[mh.buflen:])
 			if err != nil {
-				zap.S().Errorf("closing peer %v: %v", hex.EncodeToString(mh.Peer.ID), err)
+				zap.S().Warnf("closing peer %v: %v", hex.EncodeToString(mh.Peer.ID), err)
 				mh.Peer.Connected = false
 				return
 			}
@@ -166,7 +166,7 @@ func (mh *OverlineMessageHandler) Run() {
 			for len(currentMessage) < msgLen {
 				n, err := mh.Peer.Conn.Read(mh.buf[0:])
 				if err != nil {
-					zap.S().Errorf("closing peer %v: %v", hex.EncodeToString(mh.Peer.ID), err)
+					zap.S().Warnf("closing peer %v: %v", hex.EncodeToString(mh.Peer.ID), err)
 					mh.Peer.Connected = false
 					return
 				}
@@ -616,6 +616,20 @@ func main() {
 	zap.S().Infof("Successful handshakes with %d nodes!", len(olMessageHandlers))
 	olHandlerMapMu.Unlock()
 
+	// setup a loop to remove disconnected peers from the messageHandler
+	go func() {
+		for {
+			time.Sleep(time.Second * 10)
+			olHandlerMapMu.Lock()
+			for peer, handler := range olMessageHandlers {
+				if !handler.Peer.Connected {
+					delete(olMessageHandlers, peer)
+				}
+			}
+			olHandlerMapMu.Unlock()
+		}
+	}()
+
 	ibdBar := probar.Default(int64(startingHeight+1), "initial block download ->")
 	ibdBar.Add64(int64(startingHeight))
 
@@ -719,7 +733,7 @@ func main() {
 							if oldHeight == 0 {
 								zap.S().Infof("Setting known height of peer %v (%v) to %v", common.BriefHash(peerIDHex), rmtAddr, b.GetHeight())
 							} else {
-								zap.S().Infof("Received Valid BLOCK: Set Height of %v to %v (%v <- %v)", common.BriefHash(peerIDHex), b.GetHeight(), lclAddr, rmtAddr)
+								zap.S().Debugf("Received Valid BLOCK: Set Height of %v to %v (%v <- %v)", common.BriefHash(peerIDHex), b.GetHeight(), lclAddr, rmtAddr)
 							}
 							if goolChain.IsFollowingChain() {
 								goolChain.AddBlock(b)
@@ -761,10 +775,7 @@ func main() {
 						peerIDHex := hex.EncodeToString(oneMessage.PeerID)
 						olHandlerMapMu.Lock()
 						msgHandler := olMessageHandlers[peerIDHex]
-						lclAddr := msgHandler.Peer.Conn.LocalAddr()
-						rmtAddr := msgHandler.Peer.Conn.RemoteAddr()
 						olHandlerMapMu.Unlock()
-						zap.S().Infof("GET_BLOCK -> %v (%v -> %v)", peerIDHex, string(oneMessage.Value), lclAddr, rmtAddr)
 
 						highestBlock, err := goolChain.GetHighestBlock()
 						if err != nil {
@@ -805,28 +816,28 @@ func main() {
 								continue
 							}
 							if high > 10*highestBlock.GetHeight() && highStr[len(highStr)-2:] == "16" {
-								zap.S().Info("Trimming errant trailing 16 from abnormal request")
+								zap.S().Debug("Trimming errant trailing 16 from abnormal request")
 								high, _ = strconv.ParseUint(highStr[:len(highStr)-2], 10, 64)
-								zap.S().Infof("High side of request is now: %v", high)
+								zap.S().Debugf("High side of request is now: %v", high)
 							}
 						}
-						zap.S().Infof("GET_DATA %v -> %v-%v (%v -> %v)", peerIDHex, low, high, lclAddr, rmtAddr)
+						zap.S().Debugf("GET_DATA %v -> %v-%v (%v -> %v)", peerIDHex, low, high, lclAddr, rmtAddr)
 						go func() {
 							if err != nil {
 								zap.S().Error(err)
 								return
 							}
 							if highestBlock.GetHeight() < low {
-								zap.S().Infof("Low range of request %v exceeds local chain height %v", low, highestBlock.GetHeight())
+								zap.S().Warnf("Low range of request %v exceeds local chain height %v", low, highestBlock.GetHeight())
 								low = high + 1
 
 							} else {
 								if highestBlock.GetHeight() < high {
-									zap.S().Infof("Truncating request %v to highest available block: %v", high, highestBlock.GetHeight())
+									zap.S().Warnf("Truncating request %v to highest available block: %v", high, highestBlock.GetHeight())
 									high = highestBlock.GetHeight()
 								}
 								if high-low > 55 {
-									zap.S().Infof("Requested block range is length %v, reducing to length 55", high-low)
+									zap.S().Warnf("Requested block range is length %v, reducing to length 55", high-low)
 									high = low + 55
 								}
 							}
@@ -862,7 +873,7 @@ func main() {
 										handler.Peer.Connected = false
 										olMessageHandlers[peerIDHex] = handler
 									} else {
-										zap.S().Infof("GET_DATA -> Wrote %v bytes / %v blocks to the outbound connection!", n, len(blocksToSend.Blocks))
+										zap.S().Debugf("GET_DATA -> Wrote %v bytes / %v blocks to the outbound connection!", n, len(blocksToSend.Blocks))
 									}
 								}
 								olHandlerMapMu.Unlock()
@@ -907,7 +918,7 @@ func main() {
 						handler.Peer.Connected = false
 						olMessageHandlers[peer] = handler
 					} else {
-						zap.S().Infof("HEARTBEAT: %v -> %v", common.BriefHash(peer), reqstr)
+						zap.S().Debugf("HEARTBEAT: %v -> %v", common.BriefHash(peer), reqstr)
 					}
 				}
 			}
@@ -1143,7 +1154,7 @@ func sendBlockBytes(conn net.Conn, blockBytes []byte) error {
 		conn.Close()
 		zap.S().Warn("Didn't write complete request to outbound connection!")
 	} else {
-		zap.S().Infof("sendBlock -> Wrote %v bytes to the outbound connection!", n)
+		zap.S().Debugf("sendBlock -> Wrote %v bytes to the outbound connection!", n)
 	}
 	if err != nil {
 		return err
