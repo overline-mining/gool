@@ -887,7 +887,7 @@ func main() {
 	// heartbeat GETBLOCK
 	go func() {
 		for {
-			time.Sleep(time.Second * 5)
+			time.Sleep(time.Second * 30)
 			olHandlerMapMu.Lock()
 			for peer, messageHandler := range olMessageHandlers {
 				reqstr := messages.GET_BLOCK
