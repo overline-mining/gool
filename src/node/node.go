@@ -623,6 +623,7 @@ func main() {
 			olHandlerMapMu.Lock()
 			for peer, handler := range olMessageHandlers {
 				if !handler.Peer.Connected {
+					zap.S().Infof("Expunging disconnected peer %v %v", common.BriefHash(peer), handler.Peer.Conn.RemoteAddr())
 					delete(olMessageHandlers, peer)
 				}
 			}
