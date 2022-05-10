@@ -89,9 +89,10 @@ func (m *ConcurrentPeerMap) Get(name string) trHttp.Peer {
 }
 
 type OverlinePeer struct {
-	Conn   net.Conn
-	Height uint64
-	ID     []byte
+	Conn      net.Conn
+	Height    uint64
+	ID        []byte
+	Connected bool
 }
 
 type OverlineMessage struct {
@@ -117,15 +118,15 @@ func (mh *OverlineMessageHandler) Initialize(conn net.Conn, starter, genesis *p2
 	mh.buflen = 0
 
 	peer_id, nbuf, err := handshake_peer(conn, mh.ID, starter, genesis, &mh.buf)
-	zap.S().Infof("handshake -> %v, %v, %v", peer_id, nbuf, err)
+	zap.S().Infof("handshake (%v) -> %v, %v, %v", conn.RemoteAddr(), hex.EncodeToString(peer_id), nbuf, err)
 	mh.buflen = nbuf
 	if nbuf == -1 || err != nil {
-		zap.S().Debugf("Failed to connect to %v: %v", hex.EncodeToString(peer_id), err)
+		zap.S().Errorf("Failed to connect to %v: %v", hex.EncodeToString(peer_id), err)
 		conn.Close()
 		return
 	}
-	zap.S().Debugf("Completed handshake: %v -> %v", hex.EncodeToString(mh.ID), hex.EncodeToString(peer_id))
-	mh.Peer = OverlinePeer{Conn: conn, ID: peer_id, Height: 0}
+	zap.S().Infof("Completed handshake: %v -> %v", hex.EncodeToString(mh.ID), hex.EncodeToString(peer_id))
+	mh.Peer = OverlinePeer{Conn: conn, ID: peer_id, Height: 0, Connected: true}
 }
 
 type IBDWorkList struct {
@@ -147,6 +148,7 @@ func (mh *OverlineMessageHandler) Run() {
 			n, err = mh.Peer.Conn.Read(mh.buf[mh.buflen:])
 			if err != nil {
 				zap.S().Errorf("closing peer %v: %v", hex.EncodeToString(mh.Peer.ID), err)
+				mh.Peer.Connected = false
 				return
 			}
 			mh.buflen += n
@@ -165,6 +167,7 @@ func (mh *OverlineMessageHandler) Run() {
 				n, err := mh.Peer.Conn.Read(mh.buf[0:])
 				if err != nil {
 					zap.S().Errorf("closing peer %v: %v", hex.EncodeToString(mh.Peer.ID), err)
+					mh.Peer.Connected = false
 					return
 				}
 				mh.buflen = n
@@ -556,7 +559,9 @@ func main() {
 			olHandlerMapMu.Lock()
 			if _, ok := olMessageHandlers[hex.EncodeToString(handler.Peer.ID)]; !ok && len(handler.Peer.ID) > 0 && bytes.Compare(handler.ID, handler.Peer.ID) != 0 {
 				go handler.Run()
-				olMessageHandlers[hex.EncodeToString(handler.Peer.ID)] = handler
+				if _, ok := olMessageHandlers[hex.EncodeToString(handler.Peer.ID)]; !ok {
+					olMessageHandlers[hex.EncodeToString(handler.Peer.ID)] = handler
+				}
 				olHandlerMapMu.Unlock()
 			} else {
 				conn.Close()
@@ -566,11 +571,11 @@ func main() {
 	}()
 
 	// discover outgoing peer connections
-	var waitForPeers sync.WaitGroup
+	//var waitForPeers sync.WaitGroup
 	for _, peer := range allPeers.PeerList {
-		waitForPeers.Add(1)
+		//waitForPeers.Add(1)
 		go func() {
-			defer waitForPeers.Done()
+			//defer waitForPeers.Done()
 
 			peerString := peer.IP.String() + fmt.Sprintf(":%d", peer.Port+1)
 
@@ -593,7 +598,9 @@ func main() {
 			if len(handler.Peer.ID) > 0 && bytes.Compare(handler.ID, handler.Peer.ID) != 0 {
 				go handler.Run()
 				olHandlerMapMu.Lock()
-				olMessageHandlers[hex.EncodeToString(handler.Peer.ID)] = handler
+				if _, ok := olMessageHandlers[hex.EncodeToString(handler.Peer.ID)]; !ok {
+					olMessageHandlers[hex.EncodeToString(handler.Peer.ID)] = handler
+				}
 				olHandlerMapMu.Unlock()
 			} else {
 				conn.Close()
@@ -603,7 +610,7 @@ func main() {
 		time.Sleep(time.Millisecond * 10)
 	}
 
-	waitForPeers.Wait()
+	//waitForPeers.Wait()
 
 	olHandlerMapMu.Lock()
 	zap.S().Infof("Successful handshakes with %d nodes!", len(olMessageHandlers))
@@ -712,20 +719,23 @@ func main() {
 							if oldHeight == 0 {
 								zap.S().Infof("Setting known height of peer %v (%v) to %v", common.BriefHash(peerIDHex), rmtAddr, b.GetHeight())
 							} else {
-								zap.S().Debugf("Received Valid BLOCK: Set Height of %v to %v (%v <- %v)", common.BriefHash(peerIDHex), b.GetHeight(), lclAddr, rmtAddr)
+								zap.S().Infof("Received Valid BLOCK: Set Height of %v to %v (%v <- %v)", common.BriefHash(peerIDHex), b.GetHeight(), lclAddr, rmtAddr)
 							}
 							if goolChain.IsFollowingChain() {
 								goolChain.AddBlock(b)
 								if !gooldb.IsInitialBlockDownload() {
-									highest, err := goolChain.GetHighestBlock()
-									if err != nil && highest.GetHash() == b.GetHash() {
-
+									//highest, err := goolChain.GetHighestBlock()
+									if err != nil {
+										olHandlerMapMu.Lock()
 										for aPeerID, aHandler := range olMessageHandlers {
 											if aPeerID != peerIDHex && aHandler.Peer.Height > 0 && aHandler.Peer.Height < b.GetHeight() {
-												sendBlockBytes(msgHandler.Peer.Conn, oneMessage.Value)
-												checkError(err)
+												if msgHandler.Peer.Connected {
+													sendBlockBytes(msgHandler.Peer.Conn, oneMessage.Value)
+													checkError(err)
+												}
 											}
 										}
+										olHandlerMapMu.Unlock()
 									}
 								}
 							}
@@ -764,9 +774,11 @@ func main() {
 
 						olHandlerMapMu.Lock()
 						msgHandler = olMessageHandlers[peerIDHex]
-						err = sendBlock(msgHandler.Peer.Conn, highestBlock)
-						if err != nil {
-							zap.S().Error(err)
+						if msgHandler.Peer.Connected {
+							err = sendBlock(msgHandler.Peer.Conn, highestBlock)
+							if err != nil {
+								zap.S().Error(err)
+							}
 						}
 						olHandlerMapMu.Unlock()
 
@@ -841,13 +853,18 @@ func main() {
 
 								olHandlerMapMu.Lock()
 								msgHandler := olMessageHandlers[peerIDHex]
-								n, err := msgHandler.Peer.Conn.Write(request)
-								zap.S().Infof("GET_DATA -> Wrote %v bytes / %v blocks to the outbound connection!", n, len(blocksToSend.Blocks))
-								if n != len(request) {
-									zap.S().Fatal("Fatal error: didn't write complete request to outbound connection!")
-									os.Exit(1)
+								if olMessageHandlers[peerIDHex].Peer.Connected {
+									n, err := msgHandler.Peer.Conn.Write(request)
+									if n != len(request) || err != nil {
+										msgHandler.Peer.Conn.Close()
+										zap.S().Warnf("Didn't write complete request to outbound connection, marking connection as closed! (%v)", err)
+										handler := olMessageHandlers[peerIDHex]
+										handler.Peer.Connected = false
+										olMessageHandlers[peerIDHex] = handler
+									} else {
+										zap.S().Infof("GET_DATA -> Wrote %v bytes / %v blocks to the outbound connection!", n, len(blocksToSend.Blocks))
+									}
 								}
-								checkError(err)
 								olHandlerMapMu.Unlock()
 							} else {
 								zap.S().Errorf("Error replying to GET_DATA: %v", err)
@@ -866,8 +883,41 @@ func main() {
 			}
 		}
 	}()
+
+	// heartbeat GETBLOCK
+	go func() {
+		for {
+			time.Sleep(time.Second * 5)
+			olHandlerMapMu.Lock()
+			for peer, messageHandler := range olMessageHandlers {
+				reqstr := messages.GET_BLOCK
+				reqLen := len(reqstr)
+				request := make([]byte, reqLen+4)
+				binary.BigEndian.PutUint32(request[0:], uint32(reqLen))
+				copy(request[4:], []byte(reqstr))
+
+				if messageHandler.Peer.Connected {
+					// write the request to the connection
+					n, err := messageHandler.Peer.Conn.Write(request)
+					//zap.S().Debugf("Wrote %v bytes to the outbound connection!", n)
+					if n != len(request) || err != nil {
+						messageHandler.Peer.Conn.Close()
+						zap.S().Warn("Didn't write complete request to outbound connection, marking connection as closed! (%v)", err)
+						handler := olMessageHandlers[peer]
+						handler.Peer.Connected = false
+						olMessageHandlers[peer] = handler
+					} else {
+						zap.S().Infof("HEARTBEAT: %v -> %v", common.BriefHash(peer), reqstr)
+					}
+				}
+			}
+			olHandlerMapMu.Unlock()
+		}
+
+	}()
+
 	go func(goolChain *chain.OverlineBlockchain) {
-		blockStride := uint64(10)
+		blockStride := uint64(20)
 		iStride := uint64(0)
 		topRange := uint64(startingHeight + (iStride+1)*blockStride + 1)
 		for {
@@ -915,22 +965,24 @@ func main() {
 				binary.BigEndian.PutUint32(request[0:], uint32(reqLen))
 				copy(request[4:], []byte(reqstr))
 
-				zap.S().Debugf("Sending request: %v -> %v", peer, reqstr)
-
 				// write the request to the connection
-				n, err := messageHandler.Peer.Conn.Write(request)
-				//zap.S().Debugf("Wrote %v bytes to the outbound connection!", n)
-				if n != len(request) {
-					zap.S().Fatal("Fatal error: didn't write complete request to outbound connection!")
-					os.Exit(1)
+				if messageHandler.Peer.Connected {
+					n, err := messageHandler.Peer.Conn.Write(request)
+					//zap.S().Debugf("Wrote %v bytes to the outbound connection!", n)
+					if n != len(request) || err != nil {
+						messageHandler.Peer.Conn.Close()
+						zap.S().Warn("Didn't write complete request to outbound connection, skipping! (%v)", err)
+
+					} else {
+						zap.S().Debugf("Sending request: %v -> %v", peer, reqstr)
+					}
 				}
-				checkError(err)
 				olMessageMu.Unlock()
 
 				if gooldb.IsMultiplexPeers() {
 					iStride += 1
 				}
-				if iStride%100 == 0 && iStride != 0 { // if we've submitted a request for 1000 blocks - wait until we have received them all
+				if iStride%50 == 0 && iStride != 0 { // if we've submitted a request for 1000 blocks - wait until we have received them all
 					zap.S().Debugf("Submitted block requests for range [%v,%v]", startingHeight+(iStride-100)*blockStride, startingHeight+iStride*blockStride)
 					for {
 						ibdWorkList.Mu.Lock()
@@ -964,9 +1016,34 @@ func main() {
 		if err == nil {
 			olHandlerMapMu.Lock()
 			for _, msgHandler := range olMessageHandlers {
-				err = sendBlock(msgHandler.Peer.Conn, highestBlock)
-				if err != nil {
-					zap.S().Error(err)
+				if msgHandler.Peer.Connected {
+					err = sendBlock(msgHandler.Peer.Conn, highestBlock)
+					if err != nil {
+						zap.S().Error(err)
+					}
+				}
+			}
+			for peer, msgHandler := range olMessageHandlers {
+				if msgHandler.Peer.Connected {
+					reqstr := messages.GET_BLOCK
+					reqLen := len(reqstr)
+					request := make([]byte, reqLen+4)
+					binary.BigEndian.PutUint32(request[0:], uint32(reqLen))
+					copy(request[4:], []byte(reqstr))
+
+					zap.S().Infof("Sending request: %v -> %v", hex.EncodeToString(msgHandler.Peer.ID), reqstr)
+
+					// write the request to the connection
+					n, err := msgHandler.Peer.Conn.Write(request)
+					//zap.S().Debugf("Wrote %v bytes to the outbound connection!", n)
+					if n != len(request) {
+						msgHandler.Peer.Conn.Close()
+						zap.S().Warn("Didn't write complete request to outbound connection! (%v)", err)
+						handler := olMessageHandlers[peer]
+						handler.Peer.Connected = false
+						olMessageHandlers[peer] = handler
+
+					}
 				}
 			}
 			olHandlerMapMu.Unlock()
@@ -977,7 +1054,9 @@ func main() {
 			olHandlerMapMu.Lock()
 			localHandlers := make(map[string]OverlineMessageHandler)
 			for peer, messageHandler := range olMessageHandlers {
-				localHandlers[peer] = messageHandler
+				if messageHandler.Peer.Connected {
+					localHandlers[peer] = messageHandler
+				}
 			}
 			olHandlerMapMu.Unlock()
 			headsToCheck := make(map[string]uint64)
@@ -1029,7 +1108,9 @@ func main() {
 	defer func() {
 		olHandlerMapMu.Lock()
 		for _, handler := range olMessageHandlers {
-			handler.Peer.Conn.Close()
+			if handler.Peer.Connected {
+				handler.Peer.Conn.Close()
+			}
 		}
 		olHandlerMapMu.Unlock()
 	}()
@@ -1058,10 +1139,11 @@ func sendBlockBytes(conn net.Conn, blockBytes []byte) error {
 	binary.BigEndian.PutUint32(request[0:], uint32(reqLen))
 
 	n, err := conn.Write(request)
-	zap.S().Infof("sendBlock -> Wrote %v bytes to the outbound connection!", n)
 	if n != len(request) {
-		zap.S().Fatal("Fatal error: didn't write complete request to outbound connection!")
-		os.Exit(1)
+		conn.Close()
+		zap.S().Warn("Didn't write complete request to outbound connection!")
+	} else {
+		zap.S().Infof("sendBlock -> Wrote %v bytes to the outbound connection!", n)
 	}
 	if err != nil {
 		return err
