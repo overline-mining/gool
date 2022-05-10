@@ -512,7 +512,7 @@ func main() {
 	}
 	dhtConfig.Logger.FilterLevel(log.Debug)
 	dhtConfig.OnQuery = func(query *krpc.Msg, source net.Addr) (propagate bool) {
-		zap.S().Infof("Received query (%v): %v", source, query)
+		zap.S().Debugf("Received query (%v): %v", source, query)
 		propagate = true
 		return
 	}
@@ -805,11 +805,12 @@ func main() {
 						low := uint64(0)
 						high := uint64(0)
 						highestBlock, err := goolChain.GetHighestBlock()
+						var lowStr, highStr string
 						if len(blockRange) == 2 {
 							var lowErr error = nil
 							var highErr error = nil
-							lowStr := strings.Trim(string(blockRange[0]), "\"")
-							highStr := strings.Trim(string(blockRange[1]), "\"")
+							lowStr = strings.Trim(string(blockRange[0]), "\"")
+							highStr = strings.Trim(string(blockRange[1]), "\"")
 							low, lowErr = strconv.ParseUint(lowStr, 10, 64)
 							high, highErr = strconv.ParseUint(highStr, 10, 64)
 							if lowErr != nil || highErr != nil {
@@ -838,7 +839,7 @@ func main() {
 									high = highestBlock.GetHeight()
 								}
 								if high-low > 55 {
-									zap.S().Warnf("Requested block range is length %v, reducing to length 55", high-low)
+									zap.S().Warnf("Requested block range is length %v, reducing to length 55 (original request strings %v -> %v)", high-low, lowStr, highStr)
 									high = low + 55
 								}
 							}
