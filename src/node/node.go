@@ -611,6 +611,7 @@ func main() {
 	}
 
 	//waitForPeers.Wait()
+	time.Sleep(time.Second * 2)
 
 	olHandlerMapMu.Lock()
 	zap.S().Infof("Successful handshakes with %d nodes!", len(olMessageHandlers))
@@ -939,10 +940,18 @@ func main() {
 			}
 			olHandlerMapMu.Lock()
 			localHandlers := make(map[string]OverlineMessageHandler)
+			nConnectedPeers := 0
 			for peer, messageHandler := range olMessageHandlers {
 				localHandlers[peer] = messageHandler
+				if messageHandler.Peer.Height > 0 {
+					nConnectedPeers++
+				}
 			}
 			olHandlerMapMu.Unlock()
+			if nConnectedPeers == 0 {
+				time.Sleep(time.Second * 1)
+				continue
+			}
 			for _, messageHandler := range localHandlers {
 				high := uint64((iStride+1)*blockStride) + startingHeight + 1
 				if messageHandler.Peer.Height > 0 && high < messageHandler.Peer.Height && messageHandler.Peer.Height-high <= uint64(gooldb.Config.AncientChunkSize) {
