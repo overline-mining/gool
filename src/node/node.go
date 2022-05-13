@@ -718,7 +718,9 @@ func main() {
 							} else if gooldb.IsInitialBlockDownload() {
 								added, _ = gooldb.AddBlockRange(&blocks)
 							}
-							ibdBar.Add(added)
+							if gooldb.IsInitialBlockDownload() {
+								ibdBar.Add(added)
+							}
 						} else {
 							zap.S().Error(err)
 						}
@@ -744,8 +746,8 @@ func main() {
 								zap.S().Debugf("Received Valid BLOCK: Set Height of %v to %v (%v <- %v)", common.BriefHash(peerIDHex), b.GetHeight(), lclAddr, rmtAddr)
 							}
 							if goolChain.IsFollowingChain() {
-								goolChain.AddBlock(b)
-								if !gooldb.IsInitialBlockDownload() {
+								added := goolChain.AddBlock(b)
+								if added && !gooldb.IsInitialBlockDownload() {
 									//highest, err := goolChain.GetHighestBlock()
 									if err != nil {
 										olHandlerMapMu.Lock()
