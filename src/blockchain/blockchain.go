@@ -51,6 +51,7 @@ func DefaultOverlineBlockchainConfig() OverlineBlockchainConfig {
 type OverlineBlockchain struct {
 	Config                           OverlineBlockchainConfig
 	Mu                               sync.Mutex
+	GraphMu                          sync.Mutex
 	CheckupMu                        sync.Mutex
 	followMu                         sync.Mutex
 	Heads                            map[string]bool
@@ -115,6 +116,7 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 		}
 	}
 	// create the node in the block graph
+	obc.GraphMu.Lock()
 	blkNode := obc.BlockGraph.SetNode(
 		dagger.Path{
 			XID:   block.GetHash(),
@@ -129,6 +131,7 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 			XID:   block.GetPreviousHash(),
 			XType: BLOCK_TYPE,
 		})
+	obc.GraphMu.Unlock()
 	if found {
 		zap.S().Debugf(
 			"found previous hash in chain graph %v -> %v %v",
@@ -136,7 +139,9 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 			common.BriefHash(parentNode.Attributes["block"].(*p2p_pb.BcBlock).GetHash()),
 			found,
 		)
+		obc.GraphMu.Lock()
 		err := obc.connectToChildBlock(parentNode, blkNode)
+		obc.GraphMu.Unlock()
 		if err != nil {
 			zap.S().Panic(err)
 		}
@@ -165,17 +170,20 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 	// - connect heads that may have arrived out of order
 	serHeight := obc.DB.SerializedHeight()
 	for h, _ := range heads {
+		obc.GraphMu.Lock()
 		headNode, found := obc.BlockGraph.GetNode(
 			dagger.Path{
 				XID:   h,
 				XType: BLOCK_TYPE,
 			})
+		obc.GraphMu.Unlock()
 		if !found {
 			zap.S().Panicf("Could not find head block in graph %v", common.BriefHash(h))
 		}
 		headBlock := headNode.Attributes["block"].(*p2p_pb.BcBlock)
 		if headBlock.GetHeight() < serHeight {
 			// make new heads out of children
+			obc.GraphMu.Lock()
 			obc.BlockGraph.RangeEdgesFrom(CONNECTION_TYPE, headNode.Path, func(e dagger.Edge) bool {
 				if !obc.DB.IsInitialBlockDownload() {
 					zap.S().Infof("pop head to %v", e.To.XID)
@@ -184,15 +192,18 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 				return true
 			})
 			obc.BlockGraph.DelNode(headNode.Path)
+			obc.GraphMu.Unlock()
 			delete(heads, h)
 			continue
 		}
 		// get the head's parent node if it exists
+		obc.GraphMu.Lock()
 		parentNode, found := obc.BlockGraph.GetNode(
 			dagger.Path{
 				XID:   headNode.Attributes["block"].(*p2p_pb.BcBlock).GetPreviousHash(),
 				XType: BLOCK_TYPE,
 			})
+		obc.GraphMu.Unlock()
 		if found {
 			zap.S().Debugf(
 				"found previous hash in chain graph for head %v -> %v %v",
@@ -200,7 +211,9 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 				common.BriefHash(headBlock.GetPreviousHash()),
 				common.BriefHash(parentNode.Attributes["block"].(*p2p_pb.BcBlock).GetHash()),
 			)
+			obc.GraphMu.Lock()
 			err := obc.connectToChildBlock(parentNode, headNode)
+			obc.GraphMu.Unlock()
 			if err != nil {
 				zap.S().Panic(err)
 			}
@@ -234,6 +247,7 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 				zap.S().Panicf("Could not find head node %v", common.BriefHash(hash))
 			}
 			highestBlock := headNode.Attributes["block"].(*p2p_pb.BcBlock)
+			obc.GraphMu.Lock()
 			obc.BlockGraph.DFS(CONNECTION_TYPE, headNode.Path, func(node dagger.Node) bool {
 				blk := node.Attributes["block"].(*p2p_pb.BcBlock)
 				if common.BlockOrderingRule(highestBlock, blk) {
@@ -241,6 +255,7 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 				}
 				return true
 			})
+			obc.GraphMu.Unlock()
 			headBlock := headNode.Attributes["block"].(*p2p_pb.BcBlock)
 			hashBytes, err := hex.DecodeString(headBlock.GetPreviousHash())
 			var dbBlock *p2p_pb.BcBlock
@@ -283,12 +298,13 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 				blockDepth := highestBlock.GetHeight() - headBlock.GetHeight()
 				if blockDepth > coin.COINBASE_MATURITY && headBlock.GetPreviousHash() == dbBlock.GetHash() {
 					// make new heads out of children
+					obc.GraphMu.Lock()
 					obc.BlockGraph.RangeEdgesFrom(CONNECTION_TYPE, headNode.Path, func(e dagger.Edge) bool {
 						heads[e.To.XID] = true
 						return true
 					})
-
 					obc.BlockGraph.DelNode(headNode.Path)
+					obc.GraphMu.Unlock()
 					delete(heads, hash)
 					poppedHeadsMap[headBlock.GetHash()] = headBlock
 				}
@@ -377,11 +393,13 @@ func (obc *OverlineBlockchain) GetBlockByHash(hash string) (*p2p_pb.BcBlock, err
 	var block *p2p_pb.BcBlock = nil
 	var err error = nil
 	var hashBytes []byte
+	obc.GraphMu.Lock()
 	node, found := obc.BlockGraph.GetNode(
 		dagger.Path{
 			XID:   hash,
 			XType: BLOCK_TYPE,
 		})
+	obc.GraphMu.Unlock()
 	if found {
 		block = node.Attributes["block"].(*p2p_pb.BcBlock)
 	} else {
@@ -400,31 +418,38 @@ func (obc *OverlineBlockchain) GetBlockByHeight(height uint64) (*p2p_pb.BcBlock,
 
 	obc.Mu.Lock()
 	defer obc.Mu.Unlock()
-	highestHash := obc.currentHighestBlock.GetHash()
-	highestHeight := obc.currentHighestBlock.GetHeight()
-	if highestHeight == height {
-		return obc.currentHighestBlock, nil
-	}
+	highestBlock := obc.currentHighestBlock
 
-	if highestHeight < height {
-		return block, errors.New("Requested height exceeds chain height!")
-	}
+	if highestBlock != nil {
+		highestHash := highestBlock.GetHash()
+		highestHeight := highestBlock.GetHeight()
 
-	highestNode, _ := obc.BlockGraph.GetNode(
-		dagger.Path{
-			XID:   highestHash,
-			XType: BLOCK_TYPE,
-		})
-	// walk back from the current best block and find the block with requested height
-	// ignore other paths in tree
-	obc.BlockGraph.ReverseDFS(CONNECTION_TYPE, highestNode.Path, func(node dagger.Node) bool {
-		blk := node.Attributes["block"].(*p2p_pb.BcBlock)
-		if blk.GetHeight() == height {
-			zap.S().Infof("found height %v == %v", blk.GetHeight(), height)
-			block = blk
+		if highestHeight == height {
+			return obc.currentHighestBlock, nil
 		}
-		return true
-	})
+
+		if highestHeight < height {
+			return block, errors.New("Requested height exceeds chain height!")
+		}
+
+		obc.GraphMu.Lock()
+		highestNode, _ := obc.BlockGraph.GetNode(
+			dagger.Path{
+				XID:   highestHash,
+				XType: BLOCK_TYPE,
+			})
+		// walk back from the current best block and find the block with requested height
+		// ignore other paths in tree
+		obc.BlockGraph.ReverseDFS(CONNECTION_TYPE, highestNode.Path, func(node dagger.Node) bool {
+			blk := node.Attributes["block"].(*p2p_pb.BcBlock)
+			if blk.GetHeight() == height {
+				zap.S().Debugf("Found height in block tree: %v == %v", blk.GetHeight(), height)
+				block = blk
+			}
+			return true
+		})
+		obc.GraphMu.Unlock()
+	}
 	if block == nil {
 		block, err = obc.DB.GetBlockByHeight(height)
 	}
@@ -445,6 +470,7 @@ func (obc *OverlineBlockchain) GetBlockByTx(txHash string) (*p2p_pb.BcBlock, err
 	highestHash := obc.currentHighestBlock.GetHash()
 	obc.Mu.Unlock()
 
+	obc.GraphMu.Lock()
 	highestNode, _ := obc.BlockGraph.GetNode(
 		dagger.Path{
 			XID:   highestHash,
@@ -463,6 +489,7 @@ func (obc *OverlineBlockchain) GetBlockByTx(txHash string) (*p2p_pb.BcBlock, err
 		}
 		return true
 	})
+	obc.GraphMu.Unlock()
 	if block == nil {
 		block, err = obc.DB.GetBlockByTx(txHashBytes)
 	}
@@ -474,10 +501,12 @@ func (obc *OverlineBlockchain) GetHighestBlock() (*p2p_pb.BcBlock, error) {
 	var err error = nil
 
 	obc.Mu.Lock()
-	defer obc.Mu.Unlock()
 	if obc.currentHighestBlock != nil {
-		return obc.currentHighestBlock, nil
+		block = obc.currentHighestBlock
+		obc.Mu.Unlock()
+		return block, nil
 	}
+	obc.Mu.Unlock()
 
 	block = obc.DB.HighestBlock()
 	if block == nil {

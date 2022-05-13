@@ -245,7 +245,7 @@ func IsDistanceCorrectlyCalculated(block *p2p_pb.BcBlock) bool {
 func IsValidBlockTime(block *p2p_pb.BcBlock) bool {
 	const (
 		timeWindowVal = uint64(4 * 24 * 60 * 60 * 1000)
-		timeValHeight = uint64(6300000)
+		timeValHeight = uint64(7300000)
 	)
 
 	if block.GetHeight() < timeValHeight {

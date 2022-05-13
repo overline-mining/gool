@@ -13,3 +13,4 @@ mkdir -p ${BASE}
 mkdir -p ${BASE}/data/genesis
 
 gunzip -c data/genesis/at_genesis_balances.csv.gz > ${BASE}/data/genesis/at_genesis_balances.csv
+cp data/trackers.json ${BASE}/data/trackers.json

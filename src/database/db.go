@@ -95,12 +95,14 @@ type OverlineDB struct {
 	txMemPool              map[string]*p2p_pb.Transaction
 	mtxMemPool             map[string]*p2p_pb.MarkedTransaction
 	lookupCache            *lru.ARCCache
+	blockStripeCache       *lru.ARCCache
 }
 
 func (odb *OverlineDB) Open(filepath string, dropChainstate bool, pruneDatabaseTo uint64) error {
 	var err error
 	odb.db, err = bolt.Open(filepath, 0600, nil)
 	odb.lookupCache, err = lru.NewARC(5 * odb.Config.ActiveSet)
+	odb.blockStripeCache, err = lru.NewARC(odb.Config.ActiveSet)
 	odb.mu.Lock()
 	odb.toSerialize = make([]*p2p_pb.BcBlock, 0, 10*odb.Config.AncientChunkSize)
 	odb.incomingBlocks = make(map[string]*p2p_pb.BcBlock)
@@ -557,14 +559,22 @@ func (odb *OverlineDB) getSerializedBlock(blockHash []byte) (*p2p_pb.BcBlock, er
 		block2chunk := tx.Bucket([]byte("OVERLINE-BLOCK-CHUNK-MAP"))
 
 		chunkHash := block2chunk.Get(blockHash)
-		chunk := chunks.Get(chunkHash)
-		decompressionBuf := make([]byte, 10*len(chunk))
-		nDecompressed, err := lz4.UncompressBlock(chunk, decompressionBuf)
-		if err != nil {
-			return err
+		chunkHashStr := hex.EncodeToString(chunkHash)
+		decompedIface, chunkInCache := odb.lookupCache.Get(chunkHashStr)
+		decomped, castOk := decompedIface.([]byte)
+		if !(chunkInCache && castOk) {
+			chunk := chunks.Get(chunkHash)
+			decompressionBuf := make([]byte, 10*len(chunk))
+			nDecompressed, err := lz4.UncompressBlock(chunk, decompressionBuf)
+			if err != nil {
+				return err
+			}
+			decomped = make([]byte, nDecompressed, nDecompressed)
+			copy(decomped, decompressionBuf[:nDecompressed])
+			odb.lookupCache.Add(chunkHashStr, decomped)
 		}
 		blockList := p2p_pb.BcBlocks{}
-		err = proto.Unmarshal(decompressionBuf[:nDecompressed], &blockList)
+		err := proto.Unmarshal(decomped, &blockList)
 		if err != nil {
 			return err
 		}
