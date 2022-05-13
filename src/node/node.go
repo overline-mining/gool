@@ -129,9 +129,14 @@ func (mh *OverlineMessageHandler) Initialize(conn net.Conn, starter, genesis *p2
 	mh.Peer = OverlinePeer{Conn: conn, ID: peer_id, Height: 0, Connected: true}
 }
 
+type IBDWork struct {
+	nRequests uint64
+	isRetry   bool
+}
+
 type IBDWorkList struct {
 	Mu            sync.Mutex
-	AllowedBlocks map[uint64]uint64
+	AllowedBlocks map[uint64]IBDWork
 }
 
 func (mh *OverlineMessageHandler) Run() {
@@ -377,7 +382,7 @@ func main() {
 	// start the gool ingestion thread
 	gooldb.Run()
 
-	ibdWorkList := IBDWorkList{AllowedBlocks: make(map[uint64]uint64)}
+	ibdWorkList := IBDWorkList{AllowedBlocks: make(map[uint64]IBDWork)}
 
 	// create the chain ingester
 	goolChain := chain.OverlineBlockchain{
@@ -688,16 +693,18 @@ func main() {
 							ibdWorkList.Mu.Lock()
 							highestReceivedBlock := uint64(0)
 							for _, block := range blocks.Blocks {
-								if nreqs, ok := ibdWorkList.AllowedBlocks[block.GetHeight()]; ok {
-									nreqs -= 1
+								if thework, ok := ibdWorkList.AllowedBlocks[block.GetHeight()]; ok {
+									thework.nRequests -= 1
 									if block.GetHeight() > highestReceivedBlock {
 										highestReceivedBlock = block.GetHeight()
 									}
 									goodBlocks.Blocks = append(goodBlocks.Blocks, block)
-									ibdWorkList.AllowedBlocks[block.GetHeight()] = nreqs
-									if nreqs == 0 {
+									ibdWorkList.AllowedBlocks[block.GetHeight()] = thework
+									if thework.nRequests == 0 {
 										delete(ibdWorkList.AllowedBlocks, block.GetHeight())
-										ibdBar.Add(1)
+										if !thework.isRetry {
+											ibdBar.Add(1)
+										}
 									}
 								}
 							}
@@ -818,10 +825,16 @@ func main() {
 								zap.S().Error("Could not parse given block range: %v -> %v", blockRange[0], blockRange[1])
 								continue
 							}
-							if high > 10*highestBlock.GetHeight() && highStr[len(highStr)-2:] == "16" {
-								zap.S().Debug("Trimming errant trailing 16 from abnormal request")
-								high, _ = strconv.ParseUint(highStr[:len(highStr)-2], 10, 64)
-								zap.S().Debugf("High side of request is now: %v", high)
+							if high > 10*low {
+								if highStr[len(highStr)-2:] == "16" {
+									zap.S().Debug("Trimming errant trailing 16 from abnormal request")
+									high, _ = strconv.ParseUint(highStr[:len(highStr)-2], 10, 64)
+									zap.S().Debugf("High side of request is now: %v", high)
+								} else if highStr[len(highStr)-1:] == "1" {
+									zap.S().Debug("Trimming errant trailing 1 from abnormal request")
+									high, _ = strconv.ParseUint(highStr[:len(highStr)-1], 10, 64)
+									zap.S().Debugf("High side of request is now: %v", high)
+								}
 							}
 						}
 						zap.S().Debugf("GET_DATA %v -> %v-%v (%v -> %v)", peerIDHex, low, high, lclAddr, rmtAddr)
@@ -934,7 +947,15 @@ func main() {
 		blockStride := uint64(20)
 		iStride := uint64(0)
 		topRange := uint64(startingHeight + (iStride+1)*blockStride + 1)
+		nMaxRetries := 10      // maximum number of retries for a given 1000 block chunk, if we fail to retry this many times we exit ibd
+		nRetriesThisChunk := 0 // number of retries on this chunk
 		for {
+			needsRetry := false
+			if nRetriesThisChunk > nMaxRetries {
+				zap.S().Warn("Maximum retries for blockchunk reached, leaving initial blockdownload!")
+				gooldb.UnSetInitialBlockDownload()
+				time.Sleep(time.Second * 1)
+			}
 			if !gooldb.IsInitialBlockDownload() {
 				break
 			}
@@ -974,10 +995,10 @@ func main() {
 				ibdWorkList.Mu.Lock()
 				for i := low; i < high; i++ {
 					if _, ok := ibdWorkList.AllowedBlocks[i]; ok {
-						nrequests := ibdWorkList.AllowedBlocks[i] + 1
-						ibdWorkList.AllowedBlocks[i] = nrequests
+						nrequests := ibdWorkList.AllowedBlocks[i].nRequests + 1
+						ibdWorkList.AllowedBlocks[i] = IBDWork{nRequests: nrequests, isRetry: nRetriesThisChunk > 0}
 					} else {
-						ibdWorkList.AllowedBlocks[i] = 1
+						ibdWorkList.AllowedBlocks[i] = IBDWork{nRequests: uint64(1), isRetry: nRetriesThisChunk > 0}
 					}
 				}
 				ibdWorkList.Mu.Unlock()
@@ -1001,11 +1022,9 @@ func main() {
 				}
 				olMessageMu.Unlock()
 
-				if gooldb.IsMultiplexPeers() {
-					iStride += 1
-				}
 				if iStride%50 == 0 && iStride != 0 { // if we've submitted a request for 1000 blocks - wait until we have received them all
-					zap.S().Debugf("Submitted block requests for range [%v,%v]", startingHeight+(iStride-100)*blockStride, startingHeight+iStride*blockStride)
+					zap.S().Debugf("Submitted block requests for range [%v,%v]", startingHeight+(iStride-50)*blockStride, startingHeight+iStride*blockStride)
+					ibdTimeout := 60 // 30s in chunks of 500 ms, if we wait this long then we re-try the last 1000 blocks
 					for {
 						ibdWorkList.Mu.Lock()
 						nBlocksRemaining := len(ibdWorkList.AllowedBlocks)
@@ -1013,6 +1032,12 @@ func main() {
 						if nBlocksRemaining == 0 {
 							break
 						} else {
+							if ibdTimeout == 0 {
+								needsRetry = true
+								break
+							} else {
+								ibdTimeout -= 1
+							}
 							zap.S().Debugf("waiting for %v blocks to arrive...", nBlocksRemaining)
 							/*
 								ibdWorkList.Mu.Lock()
@@ -1025,8 +1050,22 @@ func main() {
 						}
 					}
 				}
+				if !needsRetry && gooldb.IsMultiplexPeers() {
+					iStride += 1
+				}
 
 				topRange = uint64(startingHeight + (iStride+1)*blockStride + 1)
+			}
+			if needsRetry {
+				iStride -= 50
+				nRetriesThisChunk++
+				ibdWorkList.Mu.Lock()
+				// reset ibd work list so we don't keep waiting...
+				for height, _ := range ibdWorkList.AllowedBlocks {
+					delete(ibdWorkList.AllowedBlocks, height)
+				}
+				ibdWorkList.Mu.Unlock()
+				zap.S().Warnf("Retrying block requests for range [%v,%v] (%v/%v)", startingHeight+iStride*blockStride, startingHeight+(iStride+50)*blockStride, nRetriesThisChunk, nMaxRetries)
 			}
 			if !gooldb.IsMultiplexPeers() {
 				iStride += 1
