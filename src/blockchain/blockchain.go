@@ -95,14 +95,14 @@ func (obc *OverlineBlockchain) connectToChildBlock(from, to dagger.Node) error {
 	return err
 }
 
-func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
+func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) bool {
 	_, found := obc.BlockGraph.GetNode(
 		dagger.Path{
 			XID:   block.GetHash(),
 			XType: BLOCK_TYPE,
 		})
 	if found { // no need to process a block that is already in the graph
-		return
+		return false
 	}
 	// check if the block is already in the db, if so pass
 	if !obc.DB.IsInitialBlockDownload() {
@@ -112,7 +112,7 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 			testDbBlock, err = obc.DB.GetBlockByHash(testHashBytes)
 		}
 		if err == nil && testDbBlock.GetHash() == block.GetHash() {
-			return
+			return false
 		}
 	}
 	// create the node in the block graph
@@ -381,12 +381,17 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) {
 		}
 
 	}
+	return true
 }
 
-func (obc *OverlineBlockchain) AddBlockRange(blocks *p2p_pb.BcBlocks) {
+func (obc *OverlineBlockchain) AddBlockRange(blocks *p2p_pb.BcBlocks) int {
+	added := 0
 	for _, block := range blocks.Blocks {
-		obc.AddBlock(block)
+		if obc.AddBlock(block) {
+			added++
+		}
 	}
+	return added
 }
 
 func (obc *OverlineBlockchain) GetBlockByHash(hash string) (*p2p_pb.BcBlock, error) {

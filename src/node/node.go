@@ -359,7 +359,7 @@ func main() {
 			zap.S().Fatal(err)
 			os.Exit(1)
 		}
-		err = gooldb.AddBlock(gblock)
+		_, err = gooldb.AddBlock(gblock)
 	}
 
 	genesisBlock, err := gooldb.GetBlockByHeight(uint64(1))
@@ -702,9 +702,6 @@ func main() {
 									ibdWorkList.AllowedBlocks[block.GetHeight()] = thework
 									if thework.nRequests == 0 {
 										delete(ibdWorkList.AllowedBlocks, block.GetHeight())
-										if !thework.isRetry {
-											ibdBar.Add(1)
-										}
 									}
 								}
 							}
@@ -715,11 +712,13 @@ func main() {
 							}
 						}
 						if err == nil {
+							added := 0
 							if goolChain.IsFollowingChain() {
-								goolChain.AddBlockRange(&blocks)
+								added = goolChain.AddBlockRange(&blocks)
 							} else if gooldb.IsInitialBlockDownload() {
-								gooldb.AddBlockRange(&blocks)
+								added, _ = gooldb.AddBlockRange(&blocks)
 							}
+							ibdBar.Add(added)
 						} else {
 							zap.S().Error(err)
 						}
@@ -943,10 +942,13 @@ func main() {
 
 	}()
 
+	// FIXME multiplexing peers only really works with a proper download manager
+	gooldb.UnSetMultiplexPeers()
+
 	go func(goolChain *chain.OverlineBlockchain) {
 		blockStride := uint64(20)
-		iStride := uint64(0)
-		topRange := uint64(startingHeight + (iStride+1)*blockStride + 1)
+		iStride := uint64(1) // start from 1
+		topRange := uint64(startingHeight + (iStride)*blockStride + 1)
 		nMaxRetries := 10      // maximum number of retries for a given 1000 block chunk, if we fail to retry this many times we exit ibd
 		nRetriesThisChunk := 0 // number of retries on this chunk
 		for {
@@ -959,6 +961,16 @@ func main() {
 			if !gooldb.IsInitialBlockDownload() {
 				break
 			}
+
+			// FIXME for later switch between multiplexing peers
+			/*
+				if nRetriesThisChunk == 0 {
+					gooldb.SetMultiplexPeers()
+				} else {
+					gooldb.UnSetMultiplexPeers()
+				}
+			*/
+
 			olHandlerMapMu.Lock()
 			localHandlers := make(map[string]OverlineMessageHandler)
 			nConnectedPeers := 0
@@ -974,14 +986,14 @@ func main() {
 				continue
 			}
 			for _, messageHandler := range localHandlers {
-				high := uint64((iStride+1)*blockStride) + startingHeight + 1
+				high := uint64(iStride*blockStride) + startingHeight + 1
 				if messageHandler.Peer.Height > 0 && high < messageHandler.Peer.Height && messageHandler.Peer.Height-high <= uint64(gooldb.Config.AncientChunkSize) {
 					gooldb.UnSetMultiplexPeers()
 				}
 			}
 			for peer, messageHandler := range localHandlers {
 				olMessageMu.Lock()
-				low, high := uint64(iStride*blockStride), uint64((iStride+1)*blockStride)
+				low, high := uint64((iStride-1)*blockStride), uint64(iStride*blockStride)
 				low += startingHeight + 1
 				high += startingHeight + 1
 				zap.S().Debugf("Peer %v height = %v low = %v high = %v", common.BriefHash(peer), messageHandler.Peer.Height, low, high)
@@ -995,7 +1007,7 @@ func main() {
 				ibdWorkList.Mu.Lock()
 				for i := low; i < high; i++ {
 					if _, ok := ibdWorkList.AllowedBlocks[i]; ok {
-						nrequests := ibdWorkList.AllowedBlocks[i].nRequests + 1
+						nrequests := uint64(1) //ibdWorkList.AllowedBlocks[i].nRequests + 1
 						ibdWorkList.AllowedBlocks[i] = IBDWork{nRequests: nrequests, isRetry: nRetriesThisChunk > 0}
 					} else {
 						ibdWorkList.AllowedBlocks[i] = IBDWork{nRequests: uint64(1), isRetry: nRetriesThisChunk > 0}
@@ -1021,43 +1033,50 @@ func main() {
 					}
 				}
 				olMessageMu.Unlock()
+				time.Sleep(time.Millisecond * 50) // pause between outbound requests
 
-				if iStride%50 == 0 && iStride != 0 { // if we've submitted a request for 1000 blocks - wait until we have received them all
-					zap.S().Debugf("Submitted block requests for range [%v,%v]", startingHeight+(iStride-50)*blockStride, startingHeight+iStride*blockStride)
-					ibdTimeout := 60 // 30s in chunks of 500 ms, if we wait this long then we re-try the last 1000 blocks
-					for {
-						ibdWorkList.Mu.Lock()
-						nBlocksRemaining := len(ibdWorkList.AllowedBlocks)
-						ibdWorkList.Mu.Unlock()
-						if nBlocksRemaining == 0 {
-							break
-						} else {
-							if ibdTimeout == 0 {
-								needsRetry = true
-								break
-							} else {
-								ibdTimeout -= 1
-							}
-							zap.S().Debugf("waiting for %v blocks to arrive...", nBlocksRemaining)
-							/*
-								ibdWorkList.Mu.Lock()
-								for height, num := range ibdWorkList.AllowedBlocks {
-								  zap.S().Debugf("\twaiting for block %v - %v", height, num)
-								}
-								ibdWorkList.Mu.Unlock()
-							*/
-							time.Sleep(time.Millisecond * 500)
-						}
+				if gooldb.IsMultiplexPeers() {
+					if iStride%50 == 0 {
+						break //always make sure we're waiting for proper-sized chunks
 					}
-				}
-				if !needsRetry && gooldb.IsMultiplexPeers() {
 					iStride += 1
 				}
 
 				topRange = uint64(startingHeight + (iStride+1)*blockStride + 1)
 			}
+
+			if iStride%50 == 0 && iStride != 0 { // if we've submitted a request for 1000 blocks - wait until we have received them all
+				zap.S().Debugf("Submitted block requests for range [%v,%v] (%v)", startingHeight+(iStride-50)*blockStride+1, startingHeight+(iStride)*blockStride+1, iStride)
+				ibdTimeout := 10 // 5s in chunks of 500 ms, if we wait this long then we re-try the last 1000 blocks
+				for {
+					ibdWorkList.Mu.Lock()
+					nBlocksRemaining := len(ibdWorkList.AllowedBlocks)
+					ibdWorkList.Mu.Unlock()
+					if nBlocksRemaining == 0 { // chunk is done
+						nRetriesThisChunk = 0
+						break
+					} else {
+						if ibdTimeout == 0 {
+							needsRetry = true
+							break
+						} else {
+							ibdTimeout -= 1
+						}
+						zap.S().Debugf("waiting for %v blocks to arrive...", nBlocksRemaining)
+						/*
+						   ibdWorkList.Mu.Lock()
+						   for height, num := range ibdWorkList.AllowedBlocks {
+						     zap.S().Debugf("\twaiting for block %v - %v", height, num)
+						   }
+						   ibdWorkList.Mu.Unlock()
+						*/
+						time.Sleep(time.Millisecond * 500)
+					}
+				}
+			}
+
 			if needsRetry {
-				iStride -= 50
+				iStride -= 49
 				nRetriesThisChunk++
 				ibdWorkList.Mu.Lock()
 				// reset ibd work list so we don't keep waiting...
@@ -1065,9 +1084,9 @@ func main() {
 					delete(ibdWorkList.AllowedBlocks, height)
 				}
 				ibdWorkList.Mu.Unlock()
-				zap.S().Warnf("Retrying block requests for range [%v,%v] (%v/%v)", startingHeight+iStride*blockStride, startingHeight+(iStride+50)*blockStride, nRetriesThisChunk, nMaxRetries)
+				zap.S().Warnf("Retrying block requests for range [%v,%v] (%v/%v)", startingHeight+(iStride-1)*blockStride+1, startingHeight+(iStride+49)*blockStride+1, nRetriesThisChunk, nMaxRetries)
 			}
-			if !gooldb.IsMultiplexPeers() {
+			if !needsRetry && !gooldb.IsMultiplexPeers() {
 				iStride += 1
 			}
 			time.Sleep(time.Millisecond * 350)
