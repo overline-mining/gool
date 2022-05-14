@@ -278,7 +278,7 @@ func (odb *OverlineDB) Close() {
 	odb.db.Close()
 }
 
-func (odb *OverlineDB) addBlockUnsafe(block *p2p_pb.BcBlock) {
+func (odb *OverlineDB) addBlockUnsafe(block *p2p_pb.BcBlock) bool {
 	if _, ok := odb.incomingBlocks[block.GetHash()]; !ok {
 		odb.incomingBlocks[block.GetHash()] = block
 		odb.incomingBlocksByHeight[block.GetHeight()] = block.GetHash()
@@ -300,7 +300,9 @@ func (odb *OverlineDB) addBlockUnsafe(block *p2p_pb.BcBlock) {
 		}
 	} else {
 		zap.S().Debugf("Block %v:%v already seen.", block.GetHeight(), common.BriefHash(block.GetHash()))
+		return false // not necessary to add block
 	}
+	return true // block was added
 }
 
 func (odb *OverlineDB) SetMultiplexPeers() {
@@ -372,28 +374,31 @@ func (odb *OverlineDB) HighestBlock() *p2p_pb.BcBlock {
 	return odb.highestBlock
 }
 
-func (odb *OverlineDB) AddBlock(block *p2p_pb.BcBlock) error {
+func (odb *OverlineDB) AddBlock(block *p2p_pb.BcBlock) (bool, error) {
 	isValid, err := validation.IsValidBlock(block)
 	if !isValid {
-		return err
+		return false, err
 	}
 	odb.mu.Lock()
-	odb.addBlockUnsafe(block)
+	added := odb.addBlockUnsafe(block)
 	odb.mu.Unlock()
-	return nil
+	return added, nil
 }
 
-func (odb *OverlineDB) AddBlockRange(brange *p2p_pb.BcBlocks) error {
+func (odb *OverlineDB) AddBlockRange(brange *p2p_pb.BcBlocks) (int, error) {
+	added := 0
 	for _, block := range brange.Blocks {
 		isValid, err := validation.IsValidBlock(block)
 		if !isValid {
-			return err
+			return added, err
 		}
 		odb.mu.Lock()
-		odb.addBlockUnsafe(block)
+		if odb.addBlockUnsafe(block) {
+			added++
+		}
 		odb.mu.Unlock()
 	}
-	return nil
+	return added, nil
 }
 
 func (odb *OverlineDB) AddTransaction(tx *p2p_pb.Transaction) {
