@@ -727,7 +727,10 @@ func main() {
 					case messages.BLOCK:
 						b := new(p2p_pb.BcBlock)
 						err = proto.Unmarshal(oneMessage.Value, b)
-						checkError(err)
+						if err != nil {
+							zap.S().Errorf("Deserialization error in BLOCK: %v", err)
+							continue
+						}
 						isValid, err := validation.IsValidBlock(b)
 						if isValid {
 							peerIDHex := hex.EncodeToString(oneMessage.PeerID)
