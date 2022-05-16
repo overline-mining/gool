@@ -29,7 +29,7 @@ jobs:
           BUILD=$(git rev-parse --short HEAD)
           VERSION=${TAG}-g${BUILD}
 
-          PLATFORMS=linux/amd64,linux/arm/v7,linux/arm64,linux/ppc64le,linux/s390x,linux/386,linux/arm/v5,linux/mips64le,linux/riscv64
+          PLATFORMS=linux/amd64,linux/arm/v7,linux/arm64,linux/ppc64le,linux/s390x,linux/386,linux/arm/v5,linux/mips64le
 
           docker buildx build --progress plain --platform ${PLATFORMS} --tag ${{ secrets.DOCKERHUB_ACCOUNT }}/gool:${VERSION} -f docker/Dockerfile.gool . --push
           docker buildx build --progress plain --platform ${PLATFORMS} --tag ${{ secrets.DOCKERHUB_ACCOUNT }}/gool:latest -f docker/Dockerfile.gool . --push
