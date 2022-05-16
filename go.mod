@@ -10,6 +10,7 @@ require (
 	github.com/autom8ter/dagger v1.0.1
 	github.com/ethereum/go-ethereum v1.10.18
 	github.com/golang-jwt/jwt/v4 v4.4.1
+	github.com/go-zeromq/zmq4 v0.14.1 // indirect
 	github.com/golang/protobuf v1.5.2
 	github.com/hashicorp/golang-lru v0.5.5-0.20210104140557-80c98217689d
 	github.com/pierrec/lz4/v4 v4.1.12
