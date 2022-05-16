@@ -3,6 +3,8 @@ name: deploy geth docker images
 on:
   workflow_dispatch:
   push:
+    branch:
+    - 'main'
     paths:
     - 'docker/Dockerfile.geth'
 

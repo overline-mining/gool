@@ -3,6 +3,8 @@ name: deploy lisk docker images
 on:
   workflow_dispatch:
   push:
+    branch:
+    - 'main'
     paths:
     - 'docker/build-lisk.sh'
 

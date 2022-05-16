@@ -3,6 +3,8 @@ name: deploy neo docker images
 on:
   workflow_dispatch:
   push:
+    branch:
+    - 'main'
     paths:
     - 'docker/build-neo.sh'
 

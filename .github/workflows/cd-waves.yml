@@ -3,6 +3,8 @@ name: deploy waves docker images
 on:
   workflow_dispatch:
   push:
+    branch:
+    - 'main'
     paths:
     - 'docker/build-waves.sh'
 
