@@ -36,6 +36,10 @@ import (
 	"sync"
 	"syscall"
 
+	gor_mux "github.com/gorilla/mux"
+	jsonrpc2http "go.neonxp.dev/jsonrpc2/http"
+	jsonrpc2 "go.neonxp.dev/jsonrpc2/rpc"
+
 	geth_rpc "github.com/ethereum/go-ethereum/rpc"
 	chain "github.com/overline-mining/gool/src/blockchain"
 	"github.com/overline-mining/gool/src/genesis"
@@ -400,6 +404,14 @@ func main() {
 	blockchainService := new(rpc.BlockchainService)
 	blockchainService.Chain = &goolChain
 
+	// olNodeRPC interface
+	olNode_GetBlockHash := func(ctx context.Context, hash *[]string) (*p2p_pb.BcBlock, error) {
+		return blockchainService.GetBlockByHash((*hash)[0])
+	}
+
+	olNodeService := jsonrpc2http.New()
+	olNodeService.Register("getBlockHash", jsonrpc2.Wrap(olNode_GetBlockHash))
+
 	adminService := new(rpc.AdminService)
 
 	rpcServer.RegisterName("ovl", blockchainService)
@@ -419,6 +431,15 @@ func main() {
 		}()
 	}
 
+	// the olNodeService binds to 0.0.0.0 and exposes a minimum number of interfaces
+	// necessary to interact with javascript olnodes
+	go func() {
+		r := gor_mux.NewRouter()
+		r.Handle("/rpc", olNodeService)
+		err := http.ListenAndServe(":3000", r)
+		zap.S().Error(err)
+	}()
+
 	id_bytes := make([]byte, 32)
 	rand.Read(id_bytes)
 	id := metainfo.HashBytes(id_bytes)
@@ -435,6 +456,7 @@ func main() {
 		"udp://internal.xeroxparc.org:16060/announce",
 		"udp://reboot.alcor1436.com:16060/announce",
 		"udp://sa1.alcor1436.com:16060/announce",
+		"udp://104.207.130.112:16060/announce",
 	}
 
 	zap.S().Infof("Infohash -> %v", infoHash)
@@ -901,9 +923,23 @@ func main() {
 								zap.S().Errorf("Error replying to GET_DATA: %v", err)
 							}
 						}()
+					case messages.GET_RECORD:
+						peerIDHex := hex.EncodeToString(oneMessage.PeerID)
+						olHandlerMapMu.Lock()
+						msgHandler := olMessageHandlers[peerIDHex]
+						lclAddr := msgHandler.Peer.Conn.LocalAddr()
+						rmtAddr := msgHandler.Peer.Conn.RemoteAddr()
+						zap.S().Infof("GET_RECORD %v -> %v", lclAddr, rmtAddr)
+					case messages.RECORD:
+						peerIDHex := hex.EncodeToString(oneMessage.PeerID)
+						olHandlerMapMu.Lock()
+						msgHandler := olMessageHandlers[peerIDHex]
+						lclAddr := msgHandler.Peer.Conn.LocalAddr()
+						rmtAddr := msgHandler.Peer.Conn.RemoteAddr()
+						zap.S().Infof("RECORD %v <- %v", lclAddr, rmtAddr)
 
 					default:
-						zap.S().Debugf("Throwing away: %v->%v", hex.EncodeToString(oneMessage.PeerID), oneMessage.Type)
+						zap.S().Infof("Throwing away: %v->%v", hex.EncodeToString(oneMessage.PeerID), oneMessage.Type)
 					}
 
 				}
@@ -1297,6 +1333,22 @@ func handshake_peer(conn net.Conn, id []byte, starter, genesis *p2p_pb.BcBlock, 
 	if err != nil {
 		return make([]byte, 0), -1, err
 	}
+	/*
+	   	recBytes := []byte(messages.GET_RECORD)
+	   	recLen := len(recBytes)
+	   	recuest := make([]byte, recLen+4)
+	   	copy(recuest[4:], recBytes)
+	   	binary.BigEndian.PutUint32(recuest[0:], uint32(recLen))
+
+
+	   	n, err = conn.Write(recuest)
+	           //zap.S().Debugf("Wrote %v bytes to the outbound connection!", n)
+	           if n != len(recuest) {
+	                   zap.S().Fatal("Fatal error: didn't write complete request to outbound connection!")
+	                   os.Exit(1)
+	           }
+	           checkError(err)
+	*/
 	reqbytes := []byte(messages.BLOCK)
 	reqbytes = append(reqbytes, []byte(messages.SEPARATOR)...)
 	reqbytes = append(reqbytes, starterBytes...)
