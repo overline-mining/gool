@@ -939,7 +939,7 @@ func main() {
 						zap.S().Infof("RECORD %v <- %v", lclAddr, rmtAddr)
 
 					default:
-						zap.S().Infof("Throwing away: %v->%v", hex.EncodeToString(oneMessage.PeerID), oneMessage.Type)
+						zap.S().Warnf("Throwing away: %v->%v", hex.EncodeToString(oneMessage.PeerID), oneMessage.Type)
 					}
 
 				}
