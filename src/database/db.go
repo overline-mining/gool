@@ -379,6 +379,14 @@ func (odb *OverlineDB) AddBlock(block *p2p_pb.BcBlock) (bool, error) {
 	if !isValid {
 		return false, err
 	}
+	// at this point the block is known to be valid
+	testHashBytes, _ := hex.DecodeString(block.GetHash())
+	testDbBlock, _ := odb.GetBlockByHash(testHashBytes)
+
+	if testDbBlock != nil && testDbBlock.GetHash() == block.GetHash() {
+		return false, errors.New(fmt.Sprintf("Block %v already in database", common.BriefHash(block.GetHash())))
+	}
+
 	odb.mu.Lock()
 	added := odb.addBlockUnsafe(block)
 	odb.mu.Unlock()
@@ -391,6 +399,11 @@ func (odb *OverlineDB) AddBlockRange(brange *p2p_pb.BcBlocks) (int, error) {
 		isValid, err := validation.IsValidBlock(block)
 		if !isValid {
 			return added, err
+		}
+		testHashBytes, _ := hex.DecodeString(block.GetHash())
+		testDbBlock, _ := odb.GetBlockByHash(testHashBytes)
+		if testDbBlock != nil && testDbBlock.GetHash() == block.GetHash() {
+			return added, errors.New(fmt.Sprintf("Block %v already in database", common.BriefHash(block.GetHash())))
 		}
 		odb.mu.Lock()
 		if odb.addBlockUnsafe(block) {
@@ -789,6 +802,7 @@ func (odb *OverlineDB) runSerialization() {
 	sort.SliceStable(odb.toSerialize, func(i, j int) bool {
 		return common.BlockOrderingRule(odb.toSerialize[i], odb.toSerialize[j])
 	})
+
 	if len(odb.toSerialize) > odb.Config.AncientChunkSize {
 		toSerialize := odb.toSerialize[:odb.Config.AncientChunkSize]
 		if odb.tipOfSerializedChain != nil {
