@@ -44,6 +44,7 @@ import (
 	chain "github.com/overline-mining/gool/src/blockchain"
 	"github.com/overline-mining/gool/src/genesis"
 	"github.com/overline-mining/gool/src/protocol/messages"
+	"github.com/overline-mining/gool/src/protocol/services"
 	p2p_pb "github.com/overline-mining/gool/src/protos"
 	"github.com/overline-mining/gool/src/rpc"
 	//"github.com/overline-mining/gool/src/transactions"
@@ -929,6 +930,7 @@ func main() {
 						msgHandler := olMessageHandlers[peerIDHex]
 						lclAddr := msgHandler.Peer.Conn.LocalAddr()
 						rmtAddr := msgHandler.Peer.Conn.RemoteAddr()
+						olHandlerMapMu.Unlock()
 						zap.S().Infof("GET_RECORD %v -> %v", lclAddr, rmtAddr)
 					case messages.RECORD:
 						peerIDHex := hex.EncodeToString(oneMessage.PeerID)
@@ -936,10 +938,60 @@ func main() {
 						msgHandler := olMessageHandlers[peerIDHex]
 						lclAddr := msgHandler.Peer.Conn.LocalAddr()
 						rmtAddr := msgHandler.Peer.Conn.RemoteAddr()
+						olHandlerMapMu.Unlock()
 						zap.S().Infof("RECORD %v <- %v", lclAddr, rmtAddr)
+					case messages.GET_CONFIG:
+						peerIDHex := hex.EncodeToString(oneMessage.PeerID)
+						olHandlerMapMu.Lock()
+						msgHandler := olMessageHandlers[peerIDHex]
+						lclAddr := msgHandler.Peer.Conn.LocalAddr()
+						rmtAddr := msgHandler.Peer.Conn.RemoteAddr()
+						zap.S().Infof("GET_CONFIG %v <- %v", lclAddr, rmtAddr)
+
+						configToSend := new(p2p_pb.Config)
+						configToSend.Version = 0x01 // fix me legacy versioning jsnode stuff
+
+						uiService := new(p2p_pb.Service)
+						uiService.Version = 0x01 // fixme legacy versioning jsnode stuff
+						uiService.Uuid = services.BORDERLESS_RPC
+						uiService.Text = "BC_UI_PORT:3000"
+						configToSend.Services = append(configToSend.Services, uiService)
+
+						p2pService := new(p2p_pb.Service)
+						p2pService.Version = 0x01 // fix me legacy versioning jsnode stuff
+						p2pService.Uuid = services.AT_P2P
+						p2pService.Text = strings.Join(messages.AllMessageTypes, ",")
+						configToSend.Services = append(configToSend.Services, p2pService)
+
+						bytesToSend, err := proto.Marshal(configToSend)
+
+						if err == nil {
+							reqbytes := []byte(messages.CONFIG)
+							reqbytes = append(reqbytes, []byte(messages.SEPARATOR)...)
+							reqbytes = append(reqbytes, bytesToSend...)
+							reqLen := len(reqbytes)
+							request := make([]byte, reqLen+4)
+							copy(request[4:], reqbytes)
+							binary.BigEndian.PutUint32(request[0:], uint32(reqLen))
+
+							if olMessageHandlers[peerIDHex].Peer.Connected {
+								n, err := msgHandler.Peer.Conn.Write(request)
+								if n != len(request) || err != nil {
+									msgHandler.Peer.Conn.Close()
+									zap.S().Warnf("Didn't write complete request to outbound connection, marking connection as closed! (%v)", err)
+									handler := olMessageHandlers[peerIDHex]
+									handler.Peer.Connected = false
+									olMessageHandlers[peerIDHex] = handler
+								} else {
+									zap.S().Debugf("GET_CONFIG -> Wrote %v bytes blocks to the outbound connection!", n)
+								}
+							}
+						}
+
+						olHandlerMapMu.Unlock()
 
 					default:
-						zap.S().Warnf("Throwing away: %v->%v", hex.EncodeToString(oneMessage.PeerID), oneMessage.Type)
+						zap.S().Warnf("Throwing away: %v -> %v", common.BriefHash(hex.EncodeToString(oneMessage.PeerID)), oneMessage.Type)
 					}
 
 				}
