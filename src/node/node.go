@@ -730,7 +730,7 @@ func main() {
 							}
 							ibdWorkList.Mu.Unlock()
 							blocks = goodBlocks
-							if highestNonZeroPeerHeight != 0 && highestNonZeroPeerHeight-10 < highestReceivedBlock {
+							if highestNonZeroPeerHeight != 0 && highestNonZeroPeerHeight-20 < highestReceivedBlock {
 								gooldb.UnSetInitialBlockDownload()
 							}
 						}
