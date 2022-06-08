@@ -774,19 +774,16 @@ func main() {
 							if goolChain.IsFollowingChain() {
 								added := goolChain.AddBlock(b)
 								if added && !gooldb.IsInitialBlockDownload() {
-									//highest, err := goolChain.GetHighestBlock()
-									if err != nil {
-										olHandlerMapMu.Lock()
-										for aPeerID, aHandler := range olMessageHandlers {
-											if aPeerID != peerIDHex && aHandler.Peer.Height > 0 && aHandler.Peer.Height < b.GetHeight() {
-												if msgHandler.Peer.Connected {
-													sendBlockBytes(msgHandler.Peer.Conn, oneMessage.Value)
-													checkError(err)
-												}
+									olHandlerMapMu.Lock()
+									for aPeerID, aHandler := range olMessageHandlers {
+										if aPeerID != peerIDHex && aHandler.Peer.Height > 0 && aHandler.Peer.Height < b.GetHeight() {
+											if msgHandler.Peer.Connected {
+												sendBlockBytes(msgHandler.Peer.Conn, oneMessage.Value)
+												checkError(err)
 											}
 										}
-										olHandlerMapMu.Unlock()
 									}
+									olHandlerMapMu.Unlock()
 								}
 							}
 							if gooldb.IsInitialBlockDownload() {
