@@ -583,7 +583,12 @@ func main() {
 				continue
 			}
 			handler := OverlineMessageHandler{Mu: &olMessageMu, Messages: &olMessages, ID: id_bytes}
-			handler.Initialize(conn, startingHighestBlock, genesisBlock)
+			chainHighest, _ := goolChain.GetHighestBlock()
+			if chainHighest != nil {
+				handler.Initialize(conn, chainHighest, genesisBlock)
+			} else {
+				handler.Initialize(conn, startingHighestBlock, genesisBlock)
+			}
 			olHandlerMapMu.Lock()
 			if _, ok := olMessageHandlers[hex.EncodeToString(handler.Peer.ID)]; !ok && len(handler.Peer.ID) > 0 && bytes.Compare(handler.ID, handler.Peer.ID) != 0 {
 				go handler.Run()
@@ -595,6 +600,7 @@ func main() {
 				conn.Close()
 				olHandlerMapMu.Unlock()
 			}
+
 		}
 	}()
 
@@ -622,7 +628,12 @@ func main() {
 			}
 
 			handler := OverlineMessageHandler{Mu: &olMessageMu, Messages: &olMessages, ID: id_bytes}
-			handler.Initialize(conn, startingHighestBlock, genesisBlock)
+			chainHighest, _ := goolChain.GetHighestBlock()
+			if chainHighest != nil {
+				handler.Initialize(conn, chainHighest, genesisBlock)
+			} else {
+				handler.Initialize(conn, startingHighestBlock, genesisBlock)
+			}
 			if len(handler.Peer.ID) > 0 && bytes.Compare(handler.ID, handler.Peer.ID) != 0 {
 				go handler.Run()
 				olHandlerMapMu.Lock()
