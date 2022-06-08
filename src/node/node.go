@@ -789,7 +789,7 @@ func main() {
 									for aPeerID, aHandler := range olMessageHandlers {
 										if aPeerID != peerIDHex && aHandler.Peer.Height > 0 && aHandler.Peer.Height < b.GetHeight() {
 											if msgHandler.Peer.Connected {
-												sendBlockBytes(msgHandler.Peer.Conn, oneMessage.Value)
+												sendBlockBytes(aHandler.Peer.Conn, oneMessage.Value)
 												checkError(err)
 											}
 										}
