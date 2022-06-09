@@ -96,6 +96,7 @@ func (m *ConcurrentPeerMap) Get(name string) trHttp.Peer {
 type OverlinePeer struct {
 	Conn      net.Conn
 	Height    uint64
+	Hash      string
 	ID        []byte
 	Connected bool
 }
@@ -772,6 +773,7 @@ func main() {
 							msgHandler := olMessageHandlers[peerIDHex]
 							oldHeight := msgHandler.Peer.Height
 							msgHandler.Peer.Height = b.GetHeight()
+							msgHandler.Peer.Hash = b.GetHash()
 							lclAddr := msgHandler.Peer.Conn.LocalAddr()
 							rmtAddr := msgHandler.Peer.Conn.RemoteAddr()
 							olMessageHandlers[peerIDHex] = msgHandler
@@ -787,7 +789,7 @@ func main() {
 								if added && !gooldb.IsInitialBlockDownload() {
 									olHandlerMapMu.Lock()
 									for aPeerID, aHandler := range olMessageHandlers {
-										if aPeerID != peerIDHex && aHandler.Peer.Height > 0 && aHandler.Peer.Height < b.GetHeight() {
+										if aPeerID != peerIDHex && aHandler.Peer.Height > 0 && (aHandler.Peer.Height < b.GetHeight() || (aHandler.Peer.Height == b.GetHeight() && aHandler.Peer.Hash != b.GetHash())) {
 											if msgHandler.Peer.Connected {
 												sendBlockBytes(aHandler.Peer.Conn, oneMessage.Value)
 												checkError(err)
