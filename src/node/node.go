@@ -31,6 +31,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -99,6 +100,7 @@ type OverlinePeer struct {
 	Hash      string
 	ID        []byte
 	Connected bool
+	IsGool    bool
 }
 
 type OverlineMessage struct {
@@ -132,7 +134,7 @@ func (mh *OverlineMessageHandler) Initialize(conn net.Conn, starter, genesis *p2
 		return
 	}
 	zap.S().Infof("Completed handshake: %v -> %v", common.BriefHash(hex.EncodeToString(mh.ID)), common.BriefHash(hex.EncodeToString(peer_id)))
-	mh.Peer = OverlinePeer{Conn: conn, ID: peer_id, Height: 0, Connected: true}
+	mh.Peer = OverlinePeer{Conn: conn, ID: peer_id, Height: 0, Connected: true, IsGool: false} // always start with gool unflagged
 }
 
 type IBDWork struct {
@@ -973,6 +975,12 @@ func main() {
 						p2pService.Text = strings.Join(messages.AllMessageTypes, ",")
 						configToSend.Services = append(configToSend.Services, p2pService)
 
+						goolService := new(p2p_pb.Service)
+						goolService.Version = 0x01
+						goolService.Uuid = fmt.Sprintf("gool-%v", id)
+						goolService.Text = fmt.Sprintf("%v/%v/%v/%v", common.GetVersion(), runtime.GOOS, runtime.GOARCH, runtime.Version())
+						configToSend.Services = append(configToSend.Services, goolService)
+
 						bytesToSend, err := proto.Marshal(configToSend)
 
 						if err == nil {
@@ -999,6 +1007,27 @@ func main() {
 						}
 
 						olHandlerMapMu.Unlock()
+
+					case messages.CONFIG:
+						peerIDHex := hex.EncodeToString(oneMessage.PeerID)
+						olHandlerMapMu.Lock()
+						msgHandler := olMessageHandlers[peerIDHex]
+						lclAddr := msgHandler.Peer.Conn.LocalAddr()
+						rmtAddr := msgHandler.Peer.Conn.RemoteAddr()
+						olHandlerMapMu.Unlock()
+						zap.S().Infof("CONFIG %v <- %v", lclAddr, rmtAddr)
+
+						conf := new(p2p_pb.Config)
+						err = proto.Unmarshal(oneMessage.Value, conf)
+						if err != nil {
+							zap.S().Errorf("Deserialization error in CONFIG: %v", err)
+							continue
+						}
+
+						for _, service := range conf.Services {
+							zap.S().Infof("Service UUID: %v", service.GetUuid())
+							zap.S().Infof("Service Text: %v", service.GetText())
+						}
 
 					default:
 						zap.S().Warnf("Throwing away: %v -> %v", common.BriefHash(hex.EncodeToString(oneMessage.PeerID)), oneMessage.Type)
@@ -1416,6 +1445,20 @@ func handshake_peer(conn net.Conn, id []byte, starter, genesis *p2p_pb.BcBlock, 
 	reqbytes = append(reqbytes, starterBytes...)
 	reqLen := len(reqbytes)
 	request := make([]byte, reqLen+4)
+	copy(request[4:], reqbytes)
+	binary.BigEndian.PutUint32(request[0:], uint32(reqLen))
+
+	n, err = conn.Write(request)
+	//zap.S().Debugf("Wrote %v bytes to the outbound connection!", n)
+	if n != len(request) {
+		zap.S().Fatal("Fatal error: didn't write complete request to outbound connection!")
+		os.Exit(1)
+	}
+	checkError(err)
+
+	reqbytes = []byte(messages.GET_CONFIG)
+	reqLen = len(reqbytes)
+	request = make([]byte, reqLen+4)
 	copy(request[4:], reqbytes)
 	binary.BigEndian.PutUint32(request[0:], uint32(reqLen))
 
