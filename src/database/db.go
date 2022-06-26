@@ -168,6 +168,11 @@ func (odb *OverlineDB) Open(filepath string, dropChainstate bool, pruneDatabaseT
 		txs := tx.Bucket(ChainstateTxs)
 		mtxs := tx.Bucket(ChainstateMTxs)
 		if blocks == nil {
+			tx.CreateBucketIfNotExists([]byte("OVERLINE-BLOCK-CHUNKS"))
+			tx.CreateBucketIfNotExists([]byte("OVERLINE-BLOCK-CHUNK-MAP"))
+			tx.CreateBucketIfNotExists([]byte("OVERLINE-BLOCK-HEIGHT-TO-HASH"))
+			tx.CreateBucketIfNotExists([]byte("OVERLINE-TX-TO-BLOCK"))
+			tx.CreateBucketIfNotExists([]byte("SYNC-INFO"))
 			return errors.New("Uninitialized blockchain file!")
 		}
 		odb.ibdMu.Lock()
@@ -575,6 +580,10 @@ func (odb *OverlineDB) getSerializedBlock(blockHash []byte) (*p2p_pb.BcBlock, er
 	err := odb.db.View(func(tx *bolt.Tx) error {
 		chunks := tx.Bucket([]byte("OVERLINE-BLOCK-CHUNKS"))
 		block2chunk := tx.Bucket([]byte("OVERLINE-BLOCK-CHUNK-MAP"))
+
+		if block2chunk == nil {
+			return errors.New("OVERLINE-BLOCK-CHUNK-MAP not initialized in database!")
+		}
 
 		chunkHash := block2chunk.Get(blockHash)
 		chunkHashStr := hex.EncodeToString(chunkHash)
