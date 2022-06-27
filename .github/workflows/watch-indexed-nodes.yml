@@ -28,7 +28,7 @@ jobs:
           echo neo2=${NEO2_VERSION}
           sed -i "s/NEO_VERSION=\".*/NEO_VERSION=\"v${NEO2_VERSION}\"/" docker/build-neo*.sh
           # waves
-          WAVES_VERSION=$(curl -s https://api.github.com/repos/wavesplatform/Waves/releases | grep "tag_name" | grep "v1.3" | head -1 | awk '{print substr($2, 3, length($2)-4)}')
+          WAVES_VERSION=$(curl -s https://api.github.com/repos/wavesplatform/Waves/releases | grep "tag_name" | grep "v1.4" | head -1 | awk '{print substr($2, 3, length($2)-4)}')
           echo waves=${WAVES_VERSION}
           sed -i "s/WAVES_VERSION=\".*/WAVES_VERSION=\"v${WAVES_VERSION}\"/" docker/build-waves*.sh
           # lisk
