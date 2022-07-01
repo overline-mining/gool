@@ -14,7 +14,7 @@ jobs:
       - uses: actions/checkout@v2
       - name: Check latest versions of the indexed chain nodes
         run: |
-          ./check_indexed_chains.sh
+          ./check-indexed-chains.sh
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v3
         with:
