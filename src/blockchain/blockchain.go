@@ -340,7 +340,9 @@ func (obc *OverlineBlockchain) AddBlock(block *p2p_pb.BcBlock) bool {
 
 		if longestHeadWithDB.LowestBlock != nil {
 			obc.Mu.Lock()
-			obc.currentHighestBlock = longestHeadWithDB.HighestBlock
+			if common.BlockOrderingRule(obc.currentHighestBlock, longestHeadWithDB.HighestBlock) {
+				obc.currentHighestBlock = longestHeadWithDB.HighestBlock
+			}
 			obc.Mu.Unlock()
 			if highestHead.LowestBlock != nil && !highestHead.HasDB {
 				heightDiff := highestHead.HighestBlock.GetHeight() - longestHeadWithDB.HighestBlock.GetHeight()

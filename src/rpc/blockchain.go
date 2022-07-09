@@ -12,31 +12,31 @@ type BlockchainService struct {
 	Chain *blockchain.OverlineBlockchain
 }
 
-func (s *BlockchainService) GetBlockByHash(hash string) (p2p_pb.BcBlock, error) {
+func (s *BlockchainService) GetBlockByHash(hash string) (*p2p_pb.BcBlock, error) {
 	block, err := s.Chain.GetBlockByHash(hash)
 	if err != nil {
 		block = new(p2p_pb.BcBlock)
 	}
-	return *block, err
+	return block, err
 }
 
-func (s *BlockchainService) GetBlockByHeight(height uint64) (p2p_pb.BcBlock, error) {
+func (s *BlockchainService) GetBlockByHeight(height uint64) (*p2p_pb.BcBlock, error) {
 	block, err := s.Chain.GetBlockByHeight(height)
 	if err != nil {
 		block = new(p2p_pb.BcBlock)
 	}
-	return *block, err
+	return block, err
 }
 
-func (s *BlockchainService) GetBlockByTx(txHash string) (p2p_pb.BcBlock, error) {
+func (s *BlockchainService) GetBlockByTx(txHash string) (*p2p_pb.BcBlock, error) {
 	block, err := s.Chain.GetBlockByTx(txHash)
 	if err != nil {
 		block = new(p2p_pb.BcBlock)
 	}
-	return *block, err
+	return block, err
 }
 
-func (s *BlockchainService) GetTxByHash(txHash string) (p2p_pb.Transaction, error) {
+func (s *BlockchainService) GetTxByHash(txHash string) (*p2p_pb.Transaction, error) {
 	var tx *p2p_pb.Transaction
 	block, err := s.Chain.GetBlockByTx(txHash)
 	if err != nil {
@@ -49,7 +49,7 @@ func (s *BlockchainService) GetTxByHash(txHash string) (p2p_pb.Transaction, erro
 			}
 		}
 	}
-	return *tx, err
+	return tx, err
 }
 
 func (s *BlockchainService) Syncing() (interface{}, error) {
@@ -66,10 +66,10 @@ func (s *BlockchainService) Syncing() (interface{}, error) {
 	}, nil
 }
 
-func (s *BlockchainService) GetHighestBlock() (p2p_pb.BcBlock, error) {
+func (s *BlockchainService) GetHighestBlock() (*p2p_pb.BcBlock, error) {
 	block, err := s.Chain.GetHighestBlock()
 	if err != nil {
 		block = new(p2p_pb.BcBlock)
 	}
-	return *block, err
+	return block, err
 }
