@@ -408,7 +408,8 @@ func (odb *OverlineDB) AddBlockRange(brange *p2p_pb.BcBlocks) (int, error) {
 		testHashBytes, _ := hex.DecodeString(block.GetHash())
 		testDbBlock, _ := odb.GetBlockByHash(testHashBytes)
 		if testDbBlock != nil && testDbBlock.GetHash() == block.GetHash() {
-			return added, errors.New(fmt.Sprintf("Block %v already in database", common.BriefHash(block.GetHash())))
+			//return added, errors.New(fmt.Sprintf("Block %v already in database", common.BriefHash(block.GetHash())))
+			continue
 		}
 		odb.mu.Lock()
 		if odb.addBlockUnsafe(block) {
