@@ -461,6 +461,9 @@ func main() {
 		"udp://reboot.alcor1436.com:16060/announce",
 		"udp://sa1.alcor1436.com:16060/announce",
 		"udp://104.207.130.112:16060/announce",
+		"udp://opensource_tor.dexvr.org:16060/announce",
+		"udp://p2p.dewiscan.com:16060/announce",
+		"udp://sp-1.presidentdao.com:16060/announce",
 	}
 
 	zap.S().Infof("Infohash -> %v", infoHash)
@@ -754,6 +757,9 @@ func main() {
 								added = goolChain.AddBlockRange(&blocks)
 							} else if gooldb.IsInitialBlockDownload() {
 								added, _ = gooldb.AddBlockRange(&blocks)
+								if added > 0 {
+									zap.S().Debugf("Added: %v [%v, %v]", added, blocks.Blocks[0].GetHeight(), blocks.Blocks[len(blocks.Blocks)-1].GetHeight())
+								}
 							}
 							if gooldb.IsInitialBlockDownload() {
 								ibdBar.Add(added)
@@ -1184,6 +1190,7 @@ func main() {
 					ibdWorkList.Mu.Lock()
 					nBlocksRemaining := len(ibdWorkList.AllowedBlocks)
 					ibdWorkList.Mu.Unlock()
+					zap.S().Debugf("There are %v blocks remaining!", nBlocksRemaining)
 					if nBlocksRemaining == 0 { // chunk is done
 						nRetriesThisChunk = 0
 						break
