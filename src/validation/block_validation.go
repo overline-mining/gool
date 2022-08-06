@@ -175,7 +175,10 @@ func IsFieldLengthBounded(block *p2p_pb.BcBlock) bool {
 }
 
 func IsMerkleRootCorrectlyCalculated(block *p2p_pb.BcBlock) bool {
-	if block.GetHeight() == uint64(6947037) || block.GetHeight() == uint64(6947078) || block.GetHeight() == uint64(6947082) {
+	if block.GetHeight() == uint64(6947037) ||
+		block.GetHeight() == uint64(6947078) ||
+		block.GetHeight() == uint64(6947082) ||
+		block.GetHeight() == uint64(7817428) {
 		zap.S().Warnf("Skipping block: %v", block.GetHeight())
 		return true
 	}
