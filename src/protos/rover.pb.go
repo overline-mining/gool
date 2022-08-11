@@ -181,6 +181,7 @@ type RoverMessage struct {
 
 	Type RoverMessageType `protobuf:"varint,1,opt,name=type,proto3,enum=bc.rover.RoverMessageType" json:"type,omitempty"`
 	// Types that are assignable to Payload:
+	//
 	//	*RoverMessage_Resync_
 	//	*RoverMessage_FetchBlock_
 	//	*RoverMessage_RoverBlockRange_
