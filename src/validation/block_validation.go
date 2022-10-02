@@ -178,7 +178,10 @@ func IsMerkleRootCorrectlyCalculated(block *p2p_pb.BcBlock) bool {
 	if block.GetHeight() == uint64(6947037) ||
 		block.GetHeight() == uint64(6947078) ||
 		block.GetHeight() == uint64(6947082) ||
-		block.GetHeight() == uint64(7817428) {
+		block.GetHeight() == uint64(7817428) ||
+		block.GetHeight() == uint64(8058624) ||
+		block.GetHeight() == uint64(8058570) ||
+		block.GetHeight() == uint64(8058618) {
 		zap.S().Warnf("Skipping block: %v", block.GetHeight())
 		return true
 	}
@@ -247,7 +250,7 @@ func IsDistanceCorrectlyCalculated(block *p2p_pb.BcBlock) bool {
 
 func IsValidBlockTime(block *p2p_pb.BcBlock) bool {
 	const (
-		timeWindowVal = uint64(4 * 24 * 60 * 60 * 1000)
+		timeWindowVal = uint64(20 * 24 * 60 * 60 * 1000)
 		timeValHeight = uint64(7300000)
 	)
 

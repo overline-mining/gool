@@ -1,4 +1,4 @@
-package rover
+package rovers
 
 import (
 	"context"
@@ -37,6 +37,7 @@ type Server struct {
 
 func (s *Server) Join(joinReq *ovl_pb.RoverIdent, stream ovl_pb.Rover_JoinServer) error {
 	name := joinReq.GetRoverName()
+	zap.S().Infof("Got join request from %v", name)
 	var requests chan *ovl_pb.RoverMessage
 	s.requestLock.Lock()
 	if _, ok := s.roverRequests[name]; !ok {
@@ -44,11 +45,15 @@ func (s *Server) Join(joinReq *ovl_pb.RoverIdent, stream ovl_pb.Rover_JoinServer
 		s.roverRequests[name] = requests
 	} else {
 		zap.S().Errorf("Rover %v is already in list of joined rovers, dropping join request!", name)
+		s.requestLock.Unlock()
+		return nil
 	}
 	s.requestLock.Unlock()
 	s.syncLock.Lock()
 	s.syncStatus[name] = false
 	s.syncLock.Unlock()
+
+	zap.S().Infof("Joined %v to rovers!", name)
 
 	for {
 		oneRequest, more := <-requests
@@ -75,12 +80,13 @@ func (s *Server) CollectBlock(stream ovl_pb.Rover_CollectBlockServer) error {
 		if err != nil {
 			return err
 		}
+		zap.S().Infof("Got a new Block -> %v", block)
 		s.incomingBlocks <- block
 	}
 	return nil
 }
 
-func (s *Server) ReportSyncStatus(ctx *context.Context, status *ovl_pb.RoverSyncStatus) (*ovl_pb.Null, error) {
+func (s *Server) ReportSyncStatus(ctx context.Context, status *ovl_pb.RoverSyncStatus) (*ovl_pb.Null, error) {
 	name := status.GetRoverName()
 	if _, ok := s.syncStatus[name]; ok {
 		s.syncLock.Lock()
@@ -93,11 +99,11 @@ func (s *Server) ReportSyncStatus(ctx *context.Context, status *ovl_pb.RoverSync
 	return &ovl_pb.Null{}, nil
 }
 
-func (s *Server) ReportBlockRange(*context.Context, *ovl_pb.RoverMessage_RoverBlockRange) (*ovl_pb.Null, error) {
+func (s *Server) ReportBlockRange(context.Context, *ovl_pb.RoverMessage_RoverBlockRange) (*ovl_pb.Null, error) {
 	return nil, nil
 }
 
-func (s *Server) IsBeforeSettleHeight(*context.Context, *ovl_pb.SettleTxCheckReq) (*ovl_pb.SettleTxCheckResponse, error) {
+func (s *Server) IsBeforeSettleHeight(context.Context, *ovl_pb.SettleTxCheckReq) (*ovl_pb.SettleTxCheckResponse, error) {
 	return nil, nil
 }
 

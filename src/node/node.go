@@ -54,6 +54,9 @@ import (
 	"github.com/overline-mining/gool/src/validation"
 	probar "github.com/schollz/progressbar/v3"
 	"google.golang.org/protobuf/proto"
+
+	"github.com/overline-mining/gool/src/rovers"
+	"google.golang.org/grpc"
 )
 
 var (
@@ -679,6 +682,15 @@ func main() {
 
 	ibdBar := probar.Default(int64(startingHeight+1), "initial block download ->")
 	ibdBar.Add64(int64(startingHeight))
+
+	grpcListener, err := net.Listen("tcp", fmt.Sprintf("localhost:9424"))
+	if err != nil {
+		zap.S().Fatalf("failed to listen: %v", err)
+	}
+	var opts []grpc.ServerOption
+	roverServer := grpc.NewServer(opts...)
+	p2p_pb.RegisterRoverServer(roverServer, rovers.NewServer())
+	go roverServer.Serve(grpcListener)
 
 	go func() {
 		for {
