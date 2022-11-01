@@ -13,7 +13,7 @@ git clone https://github.com/wavesplatform/Waves.git -b ${WAVES_VERSION}
 pushd Waves
 
 #sed -i 's/buster/unstable/' docker/Dockerfile
-sed -i 's/-it//' build-with-docker.sh
+sed -i 's/-it/-u $(id -u)/' build-with-docker.sh
 ./build-with-docker.sh && docker buildx build --platform ${ARCH} --tag ${REPO_NAME}/waves:${GOOL_VERSION} docker ${DO_PUSH} || { echo "WAVES BUILD FAILED"; popd; popd; rm -rf $(pwd)/waves-build; exit 1; }
 
 popd
