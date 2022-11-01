@@ -32,7 +32,7 @@ jobs:
           BUILD=$(git rev-parse --short HEAD)
           VERSION=${TAG}-g${BUILD}
 
-          PLATFORMS=linux/amd64,linux/arm/v7,linux/arm64,linux/s390x,linux/386,linux/arm/v5,linux/mips64le,linux/riscv64
+          PLATFORMS=linux/amd64,linux/arm64
 
           docker/build-waves.sh $PLATFORMS ${{ secrets.DOCKERHUB_ACCOUNT }} ${VERSION} --push
           docker/build-waves.sh $PLATFORMS ${{ secrets.DOCKERHUB_ACCOUNT }} latest --push
