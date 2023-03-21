@@ -1,6 +1,6 @@
 FROM debian:bullseye-slim as builder
 
-ARG GETH_VERSION=1.11.4-7e3b149b
+ARG GETH_VERSION=1.11.5-a38f4108
 
 WORKDIR /root
 
