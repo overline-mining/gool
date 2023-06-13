@@ -1,6 +1,6 @@
 #!/bin/bash
 
-WAVES_VERSION="v1.4.17"
+WAVES_VERSION="v1.4.18"
 REPO_NAME=$1
 GOOL_VERSION=$2
 
