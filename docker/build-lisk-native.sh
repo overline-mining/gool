@@ -1,6 +1,6 @@
 #!/bin/bash
 
-LISK_VERSION="v3.0.4"
+LISK_VERSION="v3.1.0"
 REPO_NAME=$1
 GOOL_VERSION=$2
 
