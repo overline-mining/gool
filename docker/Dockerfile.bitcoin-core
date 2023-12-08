@@ -1,6 +1,6 @@
 FROM debian:unstable-slim as builder
 
-ARG BTCD_VERSION=25.1
+ARG BTCD_VERSION=26.0
 
 WORKDIR /root
 
