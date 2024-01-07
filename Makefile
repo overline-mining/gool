@@ -17,10 +17,12 @@ lint:
 build-node-linux-test:
 	./build/env.sh go get -v ./...
 	./build/env.sh go build -race -o build/bin/node ./src/node
+	./build/env.sh go build -race -o build/bin/btc-rover ./src/rovers/btc/btc-rover.go
 
 build-node-linux:
 	./build/env.sh go get -v ./...
 	./build/env.sh go build -o build/bin/node ./src/node
+	./build/env.sh go build -o build/bin/btc-rover ./src/rovers/btc/btc-rover.go
 
 clean:
 	rm -rf build/_workspace/pkg/ build/_workspace/bin
