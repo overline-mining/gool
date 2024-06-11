@@ -39,6 +39,6 @@ RUN mkdir -p /opt/ethereum/bin
 COPY --from=builder --chown=ethereum:ethereum /root/geth/geth /opt/ethereum/bin
 COPY --from=builder --chown=ethereum:ethereum /root/geth/COPYING /opt/ethereum/
 
-ENTRYPOINT ["/opt/ethereum/bin/geth", "--datadir=/data", "--syncmode=light"]
+ENTRYPOINT ["/opt/ethereum/bin/geth", "--datadir=/data"]
 
 CMD ["--help"]
