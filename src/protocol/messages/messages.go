@@ -26,5 +26,37 @@ const (
 	CONFIG         = "0026W01"
 	GET_RECORD     = "0027R01"
 	RECORD         = "0028W01"
+	GET_FEED       = "0029R01"
+	FEED           = "0029W01"
 	SEPARATOR      = "[*]"
 )
+
+var AllMessageTypes = []string{
+	"HANDSHAKE",
+	"GET_BLOCKS",
+	"BLOCKS",
+	"GET_BLOCK",
+	"BLOCK",
+	"GET_MULTIVERSE",
+	"MULTIVERSE",
+	"GET_SOLUTION",
+	"SOLUTION",
+	"GET_TXS",
+	"TX",
+	"TXS",
+	"GET_HEADER",
+	"HEADER",
+	"GET_HEADERS",
+	"HEADERS",
+	"GET_DATA",
+	"DATA",
+	"GET_DISTANCE",
+	"DISTANCE",
+	"PUT_CONFIG",
+	"GET_CONFIG",
+	"CONFIG",
+	"GET_RECORD",
+	"RECORD",
+	"GET_FEED",
+	"FEED",
+}

@@ -31,15 +31,21 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 
+	gor_mux "github.com/gorilla/mux"
+	jsonrpc2http "go.neonxp.dev/jsonrpc2/http"
+	jsonrpc2 "go.neonxp.dev/jsonrpc2/rpc"
+
 	geth_rpc "github.com/ethereum/go-ethereum/rpc"
 	chain "github.com/overline-mining/gool/src/blockchain"
 	"github.com/overline-mining/gool/src/genesis"
 	"github.com/overline-mining/gool/src/protocol/messages"
+	"github.com/overline-mining/gool/src/protocol/services"
 	p2p_pb "github.com/overline-mining/gool/src/protos"
 	"github.com/overline-mining/gool/src/rpc"
 	//"github.com/overline-mining/gool/src/transactions"
@@ -48,6 +54,9 @@ import (
 	"github.com/overline-mining/gool/src/validation"
 	probar "github.com/schollz/progressbar/v3"
 	"google.golang.org/protobuf/proto"
+
+	"github.com/overline-mining/gool/src/rovers"
+	"google.golang.org/grpc"
 )
 
 var (
@@ -91,8 +100,10 @@ func (m *ConcurrentPeerMap) Get(name string) trHttp.Peer {
 type OverlinePeer struct {
 	Conn      net.Conn
 	Height    uint64
+	Hash      string
 	ID        []byte
 	Connected bool
+	IsGool    bool
 }
 
 type OverlineMessage struct {
@@ -126,7 +137,7 @@ func (mh *OverlineMessageHandler) Initialize(conn net.Conn, starter, genesis *p2
 		return
 	}
 	zap.S().Infof("Completed handshake: %v -> %v", common.BriefHash(hex.EncodeToString(mh.ID)), common.BriefHash(hex.EncodeToString(peer_id)))
-	mh.Peer = OverlinePeer{Conn: conn, ID: peer_id, Height: 0, Connected: true}
+	mh.Peer = OverlinePeer{Conn: conn, ID: peer_id, Height: 0, Connected: true, IsGool: false} // always start with gool unflagged
 }
 
 type IBDWork struct {
@@ -400,6 +411,14 @@ func main() {
 	blockchainService := new(rpc.BlockchainService)
 	blockchainService.Chain = &goolChain
 
+	// olNodeRPC interface
+	olNode_GetBlockHash := func(ctx context.Context, hash *[]string) (*p2p_pb.BcBlock, error) {
+		return blockchainService.GetBlockByHash((*hash)[0])
+	}
+
+	olNodeService := jsonrpc2http.New()
+	olNodeService.Register("getBlockHash", jsonrpc2.Wrap(olNode_GetBlockHash))
+
 	adminService := new(rpc.AdminService)
 
 	rpcServer.RegisterName("ovl", blockchainService)
@@ -419,6 +438,15 @@ func main() {
 		}()
 	}
 
+	// the olNodeService binds to 0.0.0.0 and exposes a minimum number of interfaces
+	// necessary to interact with javascript olnodes
+	go func() {
+		r := gor_mux.NewRouter()
+		r.Handle("/rpc", olNodeService)
+		err := http.ListenAndServe(":3000", r)
+		zap.S().Error(err)
+	}()
+
 	id_bytes := make([]byte, 32)
 	rand.Read(id_bytes)
 	id := metainfo.HashBytes(id_bytes)
@@ -435,6 +463,10 @@ func main() {
 		"udp://internal.xeroxparc.org:16060/announce",
 		"udp://reboot.alcor1436.com:16060/announce",
 		"udp://sa1.alcor1436.com:16060/announce",
+		"udp://104.207.130.112:16060/announce",
+		"udp://opensource_tor.dexvr.org:16060/announce",
+		"udp://p2p.dewiscan.com:16060/announce",
+		"udp://sp-1.presidentdao.com:16060/announce",
 	}
 
 	zap.S().Infof("Infohash -> %v", infoHash)
@@ -560,7 +592,12 @@ func main() {
 				continue
 			}
 			handler := OverlineMessageHandler{Mu: &olMessageMu, Messages: &olMessages, ID: id_bytes}
-			handler.Initialize(conn, startingHighestBlock, genesisBlock)
+			chainHighest, _ := goolChain.GetHighestBlock()
+			if chainHighest != nil {
+				handler.Initialize(conn, chainHighest, genesisBlock)
+			} else {
+				handler.Initialize(conn, startingHighestBlock, genesisBlock)
+			}
 			olHandlerMapMu.Lock()
 			if _, ok := olMessageHandlers[hex.EncodeToString(handler.Peer.ID)]; !ok && len(handler.Peer.ID) > 0 && bytes.Compare(handler.ID, handler.Peer.ID) != 0 {
 				go handler.Run()
@@ -572,6 +609,7 @@ func main() {
 				conn.Close()
 				olHandlerMapMu.Unlock()
 			}
+
 		}
 	}()
 
@@ -599,7 +637,12 @@ func main() {
 			}
 
 			handler := OverlineMessageHandler{Mu: &olMessageMu, Messages: &olMessages, ID: id_bytes}
-			handler.Initialize(conn, startingHighestBlock, genesisBlock)
+			chainHighest, _ := goolChain.GetHighestBlock()
+			if chainHighest != nil {
+				handler.Initialize(conn, chainHighest, genesisBlock)
+			} else {
+				handler.Initialize(conn, startingHighestBlock, genesisBlock)
+			}
 			if len(handler.Peer.ID) > 0 && bytes.Compare(handler.ID, handler.Peer.ID) != 0 {
 				go handler.Run()
 				olHandlerMapMu.Lock()
@@ -639,6 +682,15 @@ func main() {
 
 	ibdBar := probar.Default(int64(startingHeight+1), "initial block download ->")
 	ibdBar.Add64(int64(startingHeight))
+
+	grpcListener, err := net.Listen("tcp", fmt.Sprintf("localhost:9424"))
+	if err != nil {
+		zap.S().Fatalf("failed to listen: %v", err)
+	}
+	var opts []grpc.ServerOption
+	roverServer := grpc.NewServer(opts...)
+	p2p_pb.RegisterRoverServer(roverServer, rovers.NewServer())
+	go roverServer.Serve(grpcListener)
 
 	go func() {
 		for {
@@ -707,7 +759,7 @@ func main() {
 							}
 							ibdWorkList.Mu.Unlock()
 							blocks = goodBlocks
-							if highestNonZeroPeerHeight != 0 && highestNonZeroPeerHeight-10 < highestReceivedBlock {
+							if highestNonZeroPeerHeight != 0 && highestNonZeroPeerHeight-20 < highestReceivedBlock {
 								gooldb.UnSetInitialBlockDownload()
 							}
 						}
@@ -717,6 +769,9 @@ func main() {
 								added = goolChain.AddBlockRange(&blocks)
 							} else if gooldb.IsInitialBlockDownload() {
 								added, _ = gooldb.AddBlockRange(&blocks)
+								if added > 0 {
+									zap.S().Debugf("Added: %v [%v, %v]", added, blocks.Blocks[0].GetHeight(), blocks.Blocks[len(blocks.Blocks)-1].GetHeight())
+								}
 							}
 							if gooldb.IsInitialBlockDownload() {
 								ibdBar.Add(added)
@@ -738,6 +793,7 @@ func main() {
 							msgHandler := olMessageHandlers[peerIDHex]
 							oldHeight := msgHandler.Peer.Height
 							msgHandler.Peer.Height = b.GetHeight()
+							msgHandler.Peer.Hash = b.GetHash()
 							lclAddr := msgHandler.Peer.Conn.LocalAddr()
 							rmtAddr := msgHandler.Peer.Conn.RemoteAddr()
 							olMessageHandlers[peerIDHex] = msgHandler
@@ -751,19 +807,16 @@ func main() {
 							if goolChain.IsFollowingChain() {
 								added := goolChain.AddBlock(b)
 								if added && !gooldb.IsInitialBlockDownload() {
-									//highest, err := goolChain.GetHighestBlock()
-									if err != nil {
-										olHandlerMapMu.Lock()
-										for aPeerID, aHandler := range olMessageHandlers {
-											if aPeerID != peerIDHex && aHandler.Peer.Height > 0 && aHandler.Peer.Height < b.GetHeight() {
-												if msgHandler.Peer.Connected {
-													sendBlockBytes(msgHandler.Peer.Conn, oneMessage.Value)
-													checkError(err)
-												}
+									olHandlerMapMu.Lock()
+									for aPeerID, aHandler := range olMessageHandlers {
+										if aPeerID != peerIDHex && aHandler.Peer.Height > 0 && (aHandler.Peer.Height < b.GetHeight() || (aHandler.Peer.Height == b.GetHeight() && aHandler.Peer.Hash != b.GetHash())) {
+											if msgHandler.Peer.Connected {
+												sendBlockBytes(aHandler.Peer.Conn, oneMessage.Value)
+												checkError(err)
 											}
 										}
-										olHandlerMapMu.Unlock()
 									}
+									olHandlerMapMu.Unlock()
 								}
 							}
 							if gooldb.IsInitialBlockDownload() {
@@ -901,9 +954,101 @@ func main() {
 								zap.S().Errorf("Error replying to GET_DATA: %v", err)
 							}
 						}()
+					case messages.GET_RECORD:
+						peerIDHex := hex.EncodeToString(oneMessage.PeerID)
+						olHandlerMapMu.Lock()
+						msgHandler := olMessageHandlers[peerIDHex]
+						lclAddr := msgHandler.Peer.Conn.LocalAddr()
+						rmtAddr := msgHandler.Peer.Conn.RemoteAddr()
+						olHandlerMapMu.Unlock()
+						zap.S().Infof("GET_RECORD %v -> %v", lclAddr, rmtAddr)
+					case messages.RECORD:
+						peerIDHex := hex.EncodeToString(oneMessage.PeerID)
+						olHandlerMapMu.Lock()
+						msgHandler := olMessageHandlers[peerIDHex]
+						lclAddr := msgHandler.Peer.Conn.LocalAddr()
+						rmtAddr := msgHandler.Peer.Conn.RemoteAddr()
+						olHandlerMapMu.Unlock()
+						zap.S().Infof("RECORD %v <- %v", lclAddr, rmtAddr)
+					case messages.GET_CONFIG:
+						peerIDHex := hex.EncodeToString(oneMessage.PeerID)
+						olHandlerMapMu.Lock()
+						msgHandler := olMessageHandlers[peerIDHex]
+						lclAddr := msgHandler.Peer.Conn.LocalAddr()
+						rmtAddr := msgHandler.Peer.Conn.RemoteAddr()
+						zap.S().Infof("GET_CONFIG %v <- %v", lclAddr, rmtAddr)
+
+						configToSend := new(p2p_pb.Config)
+						configToSend.Version = 0x01 // fix me legacy versioning jsnode stuff
+
+						uiService := new(p2p_pb.Service)
+						uiService.Version = 0x01 // fixme legacy versioning jsnode stuff
+						uiService.Uuid = services.BORDERLESS_RPC
+						uiService.Text = "BC_UI_PORT:3000"
+						configToSend.Services = append(configToSend.Services, uiService)
+
+						p2pService := new(p2p_pb.Service)
+						p2pService.Version = 0x01 // fix me legacy versioning jsnode stuff
+						p2pService.Uuid = services.AT_P2P
+						p2pService.Text = strings.Join(messages.AllMessageTypes, ",")
+						configToSend.Services = append(configToSend.Services, p2pService)
+
+						goolService := new(p2p_pb.Service)
+						goolService.Version = 0x01
+						goolService.Uuid = fmt.Sprintf("gool-%v", id)
+						goolService.Text = fmt.Sprintf("%v/%v/%v/%v", common.GetVersion(), runtime.GOOS, runtime.GOARCH, runtime.Version())
+						configToSend.Services = append(configToSend.Services, goolService)
+
+						bytesToSend, err := proto.Marshal(configToSend)
+
+						if err == nil {
+							reqbytes := []byte(messages.CONFIG)
+							reqbytes = append(reqbytes, []byte(messages.SEPARATOR)...)
+							reqbytes = append(reqbytes, bytesToSend...)
+							reqLen := len(reqbytes)
+							request := make([]byte, reqLen+4)
+							copy(request[4:], reqbytes)
+							binary.BigEndian.PutUint32(request[0:], uint32(reqLen))
+
+							if olMessageHandlers[peerIDHex].Peer.Connected {
+								n, err := msgHandler.Peer.Conn.Write(request)
+								if n != len(request) || err != nil {
+									msgHandler.Peer.Conn.Close()
+									zap.S().Warnf("Didn't write complete request to outbound connection, marking connection as closed! (%v)", err)
+									handler := olMessageHandlers[peerIDHex]
+									handler.Peer.Connected = false
+									olMessageHandlers[peerIDHex] = handler
+								} else {
+									zap.S().Debugf("GET_CONFIG -> Wrote %v bytes blocks to the outbound connection!", n)
+								}
+							}
+						}
+
+						olHandlerMapMu.Unlock()
+
+					case messages.CONFIG:
+						peerIDHex := hex.EncodeToString(oneMessage.PeerID)
+						olHandlerMapMu.Lock()
+						msgHandler := olMessageHandlers[peerIDHex]
+						lclAddr := msgHandler.Peer.Conn.LocalAddr()
+						rmtAddr := msgHandler.Peer.Conn.RemoteAddr()
+						olHandlerMapMu.Unlock()
+						zap.S().Infof("CONFIG %v <- %v", lclAddr, rmtAddr)
+
+						conf := new(p2p_pb.Config)
+						err = proto.Unmarshal(oneMessage.Value, conf)
+						if err != nil {
+							zap.S().Errorf("Deserialization error in CONFIG: %v", err)
+							continue
+						}
+
+						for _, service := range conf.Services {
+							zap.S().Infof("Service UUID: %v", service.GetUuid())
+							zap.S().Infof("Service Text: %v", service.GetText())
+						}
 
 					default:
-						zap.S().Debugf("Throwing away: %v->%v", hex.EncodeToString(oneMessage.PeerID), oneMessage.Type)
+						zap.S().Warnf("Throwing away: %v -> %v", common.BriefHash(hex.EncodeToString(oneMessage.PeerID)), oneMessage.Type)
 					}
 
 				}
@@ -1057,6 +1202,7 @@ func main() {
 					ibdWorkList.Mu.Lock()
 					nBlocksRemaining := len(ibdWorkList.AllowedBlocks)
 					ibdWorkList.Mu.Unlock()
+					zap.S().Debugf("There are %v blocks remaining!", nBlocksRemaining)
 					if nBlocksRemaining == 0 { // chunk is done
 						nRetriesThisChunk = 0
 						break
@@ -1297,11 +1443,41 @@ func handshake_peer(conn net.Conn, id []byte, starter, genesis *p2p_pb.BcBlock, 
 	if err != nil {
 		return make([]byte, 0), -1, err
 	}
+	/*
+	   	recBytes := []byte(messages.GET_RECORD)
+	   	recLen := len(recBytes)
+	   	recuest := make([]byte, recLen+4)
+	   	copy(recuest[4:], recBytes)
+	   	binary.BigEndian.PutUint32(recuest[0:], uint32(recLen))
+
+
+	   	n, err = conn.Write(recuest)
+	           //zap.S().Debugf("Wrote %v bytes to the outbound connection!", n)
+	           if n != len(recuest) {
+	                   zap.S().Fatal("Fatal error: didn't write complete request to outbound connection!")
+	                   os.Exit(1)
+	           }
+	           checkError(err)
+	*/
 	reqbytes := []byte(messages.BLOCK)
 	reqbytes = append(reqbytes, []byte(messages.SEPARATOR)...)
 	reqbytes = append(reqbytes, starterBytes...)
 	reqLen := len(reqbytes)
 	request := make([]byte, reqLen+4)
+	copy(request[4:], reqbytes)
+	binary.BigEndian.PutUint32(request[0:], uint32(reqLen))
+
+	n, err = conn.Write(request)
+	//zap.S().Debugf("Wrote %v bytes to the outbound connection!", n)
+	if n != len(request) {
+		zap.S().Fatal("Fatal error: didn't write complete request to outbound connection!")
+		os.Exit(1)
+	}
+	checkError(err)
+
+	reqbytes = []byte(messages.GET_CONFIG)
+	reqLen = len(reqbytes)
+	request = make([]byte, reqLen+4)
 	copy(request[4:], reqbytes)
 	binary.BigEndian.PutUint32(request[0:], uint32(reqLen))
 

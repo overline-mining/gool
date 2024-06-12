@@ -168,6 +168,11 @@ func (odb *OverlineDB) Open(filepath string, dropChainstate bool, pruneDatabaseT
 		txs := tx.Bucket(ChainstateTxs)
 		mtxs := tx.Bucket(ChainstateMTxs)
 		if blocks == nil {
+			tx.CreateBucketIfNotExists([]byte("OVERLINE-BLOCK-CHUNKS"))
+			tx.CreateBucketIfNotExists([]byte("OVERLINE-BLOCK-CHUNK-MAP"))
+			tx.CreateBucketIfNotExists([]byte("OVERLINE-BLOCK-HEIGHT-TO-HASH"))
+			tx.CreateBucketIfNotExists([]byte("OVERLINE-TX-TO-BLOCK"))
+			tx.CreateBucketIfNotExists([]byte("SYNC-INFO"))
 			return errors.New("Uninitialized blockchain file!")
 		}
 		odb.ibdMu.Lock()
@@ -379,6 +384,14 @@ func (odb *OverlineDB) AddBlock(block *p2p_pb.BcBlock) (bool, error) {
 	if !isValid {
 		return false, err
 	}
+	// at this point the block is known to be valid
+	testHashBytes, _ := hex.DecodeString(block.GetHash())
+	testDbBlock, _ := odb.GetBlockByHash(testHashBytes)
+
+	if testDbBlock != nil && testDbBlock.GetHash() == block.GetHash() {
+		return false, errors.New(fmt.Sprintf("Block %v already in database", common.BriefHash(block.GetHash())))
+	}
+
 	odb.mu.Lock()
 	added := odb.addBlockUnsafe(block)
 	odb.mu.Unlock()
@@ -391,6 +404,12 @@ func (odb *OverlineDB) AddBlockRange(brange *p2p_pb.BcBlocks) (int, error) {
 		isValid, err := validation.IsValidBlock(block)
 		if !isValid {
 			return added, err
+		}
+		testHashBytes, _ := hex.DecodeString(block.GetHash())
+		testDbBlock, _ := odb.GetBlockByHash(testHashBytes)
+		if testDbBlock != nil && testDbBlock.GetHash() == block.GetHash() {
+			//return added, errors.New(fmt.Sprintf("Block %v already in database", common.BriefHash(block.GetHash())))
+			continue
 		}
 		odb.mu.Lock()
 		if odb.addBlockUnsafe(block) {
@@ -562,6 +581,10 @@ func (odb *OverlineDB) getSerializedBlock(blockHash []byte) (*p2p_pb.BcBlock, er
 	err := odb.db.View(func(tx *bolt.Tx) error {
 		chunks := tx.Bucket([]byte("OVERLINE-BLOCK-CHUNKS"))
 		block2chunk := tx.Bucket([]byte("OVERLINE-BLOCK-CHUNK-MAP"))
+
+		if block2chunk == nil {
+			return errors.New("OVERLINE-BLOCK-CHUNK-MAP not initialized in database!")
+		}
 
 		chunkHash := block2chunk.Get(blockHash)
 		chunkHashStr := hex.EncodeToString(chunkHash)
@@ -789,6 +812,7 @@ func (odb *OverlineDB) runSerialization() {
 	sort.SliceStable(odb.toSerialize, func(i, j int) bool {
 		return common.BlockOrderingRule(odb.toSerialize[i], odb.toSerialize[j])
 	})
+
 	if len(odb.toSerialize) > odb.Config.AncientChunkSize {
 		toSerialize := odb.toSerialize[:odb.Config.AncientChunkSize]
 		if odb.tipOfSerializedChain != nil {
