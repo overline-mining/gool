@@ -32,7 +32,7 @@ jobs:
           BUILD=$(git rev-parse --short HEAD)
           VERSION=v${TAG}-g${BUILD}
 
-          PLATFORMS=linux/amd64,linux/arm/v7,linux/arm64,linux/ppc64le,linux/riscv64
+          PLATFORMS=linux/amd64,linux/arm/v7,linux/arm64,linux/riscv64
 
           docker buildx build --platform $PLATFORMS --tag ${{ secrets.DOCKERHUB_ACCOUNT }}/bitcoin-core:${VERSION} -f docker/Dockerfile.bitcoin-core . --push
           docker buildx build --platform $PLATFORMS --tag ${{ secrets.DOCKERHUB_ACCOUNT }}/bitcoin-core:latest -f docker/Dockerfile.bitcoin-core . --push
